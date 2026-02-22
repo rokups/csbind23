@@ -1,0 +1,5 @@
+example/generated/
+.cache
+compile_commands.json
+build
+.vscode
