@@ -178,7 +178,7 @@ public:
         return def_impl(name, function_ptr, return_ownership, cpp_symbol);
     }
 
-    template <typename ClassType>
+    template <typename ClassType, typename BaseType = void>
     ClassBuilder class_(std::string_view name = detail::unqualified_type_name<ClassType>(),
         std::string_view cpp_name = detail::qualified_type_name<ClassType>());
 
@@ -306,11 +306,17 @@ private:
     ClassDecl* class_decl_;
 };
 
-template <typename ClassType> ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_name)
+template <typename ClassType, typename BaseType>
+ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_name)
 {
     ClassDecl class_decl;
     class_decl.name = std::string(name);
     class_decl.cpp_name = std::string(cpp_name);
+    if constexpr (!std::is_same_v<BaseType, void>)
+    {
+        class_decl.base_name = detail::unqualified_type_name<BaseType>();
+        class_decl.base_cpp_name = detail::qualified_type_name<BaseType>();
+    }
     module_decl_->classes.push_back(std::move(class_decl));
     return ClassBuilder(*owner_, module_decl_->classes.back());
 }

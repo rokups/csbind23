@@ -228,14 +228,18 @@ bool class_has_owned_ctor(const ClassDecl& class_decl)
 }
 
 void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
-    const FunctionDecl& method_decl, bool is_virtual, std::size_t virtual_index)
+    const FunctionDecl& method_decl, bool is_virtual, bool is_override, std::size_t virtual_index)
 {
     const std::string parameter_list = parameter_list_without_self(method_decl);
     const std::string native_name = std::format("{}_{}_{}", module_name, class_decl.name, method_decl.name);
     const std::string base_native_name = native_name + "__base";
     const std::string return_type = wrapper_return_type(module_decl, method_decl);
 
-    if (is_virtual)
+    if (is_override)
+    {
+        output.append_format("    public override {} {}(", return_type, method_decl.name);
+    }
+    else if (is_virtual)
     {
         output.append_format("    public virtual {} {}(", return_type, method_decl.name);
     }
@@ -619,27 +623,42 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
 void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl)
 {
+    const ClassDecl* base_class = class_decl.base_cpp_name.empty() ? nullptr : find_class_by_cpp_name(module_decl, class_decl.base_cpp_name);
+    const bool has_base_class = base_class != nullptr;
     const bool emits_destroy = class_has_owned_ctor(class_decl);
     const auto virtual_methods = collect_virtual_methods(class_decl);
     const bool has_virtual_support = !virtual_methods.empty();
+    const std::string base_clause = has_base_class ? base_class->name : "System.IDisposable";
 
     output.append_line_format(
-        "public {} class {} : System.IDisposable",
+        "public {} class {} : {}",
         has_virtual_support ? "partial" : "sealed",
-        class_decl.name);
+        class_decl.name,
+        base_clause);
     output.append_line("{");
-    output.append_line("    private System.IntPtr _handle;");
-    output.append_line("    private bool _ownsHandle;");
+    if (!has_base_class)
+    {
+        output.append_line("    protected System.IntPtr _handle;");
+        output.append_line("    protected bool _ownsHandle;");
+    }
     output.append_line();
 
-    output.append_line_format("    internal {}(System.IntPtr handle, bool ownsHandle)", class_decl.name);
-    output.append_line("    {");
-    output.append_line("        _handle = handle;");
-    output.append_line("        _ownsHandle = ownsHandle;");
-    if (has_virtual_support)
+    output.append_format("    internal {}(System.IntPtr handle, bool ownsHandle)", class_decl.name);
+    if (has_base_class)
     {
-        output.append_line("        __csbind23_RegisterInstance(_handle, this);");
-        output.append_line("        __csbind23_ConnectDirector();");
+        output.append(" : base(handle, ownsHandle)");
+    }
+    output.append_line("");
+    output.append_line("    {");
+    if (!has_base_class)
+    {
+        output.append_line("        _handle = handle;");
+        output.append_line("        _ownsHandle = ownsHandle;");
+        if (has_virtual_support)
+        {
+            output.append_line("        __csbind23_RegisterInstance(_handle, this);");
+            output.append_line("        __csbind23_ConnectDirector();");
+        }
     }
     output.append_line("    }");
     output.append_line();
@@ -657,7 +676,12 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
 
         output.append_format("    public {}(", class_decl.name);
         output.append(parameter_list);
-        output.append_line(")");
+        output.append(")");
+        if (has_base_class)
+        {
+            output.append(" : base(System.IntPtr.Zero, false)");
+        }
+        output.append_line("");
         output.append_line("    {");
 
         std::vector<std::string> converted_arguments;
@@ -721,48 +745,51 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line();
     }
 
-    output.append_line("    public void Dispose()");
-    output.append_line("    {");
-    output.append_line("        ReleaseUnmanaged();");
-    output.append_line("        System.GC.SuppressFinalize(this);");
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line_format("    ~{}()", class_decl.name);
-    output.append_line("    {");
-    output.append_line("        ReleaseUnmanaged();");
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line("    private void ReleaseUnmanaged()");
-    output.append_line("    {");
-    output.append_line("        if (_handle == System.IntPtr.Zero)");
-    output.append_line("        {");
-    output.append_line("            return;");
-    output.append_line("        }");
-    output.append_line();
-
-    if (has_virtual_support)
+    if (!has_base_class)
     {
-        output.append_line("        var __csbind23_oldHandle = _handle;");
-        output.append_line_format("        {}Native.{}_{}_disconnect_director(_handle);", module_name, module_name, class_decl.name);
-        output.append_line("        __csbind23_UnregisterInstance(__csbind23_oldHandle);");
+        output.append_line("    public void Dispose()");
+        output.append_line("    {");
+        output.append_line("        ReleaseUnmanaged();");
+        output.append_line("        System.GC.SuppressFinalize(this);");
+        output.append_line("    }");
+        output.append_line();
+
+        output.append_line_format("    ~{}()", class_decl.name);
+        output.append_line("    {");
+        output.append_line("        ReleaseUnmanaged();");
+        output.append_line("    }");
+        output.append_line();
+
+        output.append_line("    private void ReleaseUnmanaged()");
+        output.append_line("    {");
+        output.append_line("        if (_handle == System.IntPtr.Zero)");
+        output.append_line("        {");
+        output.append_line("            return;");
+        output.append_line("        }");
+        output.append_line();
+
+        if (has_virtual_support)
+        {
+            output.append_line("        var __csbind23_oldHandle = _handle;");
+            output.append_line_format("        {}Native.{}_{}_disconnect_director(_handle);", module_name, module_name, class_decl.name);
+            output.append_line("        __csbind23_UnregisterInstance(__csbind23_oldHandle);");
+            output.append_line();
+        }
+
+        output.append_line("        if (_ownsHandle)");
+        output.append_line("        {");
+        if (emits_destroy)
+        {
+            output.append_line_format(
+                "            {}Native.{}_{}_destroy(_handle);", module_name, module_name, class_decl.name);
+        }
+        output.append_line("        }");
+        output.append_line();
+        output.append_line("        _handle = System.IntPtr.Zero;");
+        output.append_line("        _ownsHandle = false;");
+        output.append_line("    }");
         output.append_line();
     }
-
-    output.append_line("        if (_ownsHandle)");
-    output.append_line("        {");
-    if (emits_destroy)
-    {
-        output.append_line_format(
-            "            {}Native.{}_{}_destroy(_handle);", module_name, module_name, class_decl.name);
-    }
-    output.append_line("        }");
-    output.append_line();
-    output.append_line("        _handle = System.IntPtr.Zero;");
-    output.append_line("        _ownsHandle = false;");
-    output.append_line("    }");
-    output.append_line();
 
     if (has_virtual_support)
     {
@@ -789,7 +816,41 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             }
         }
 
-        append_wrapper_method(output, module_decl, module_name, class_decl, method_decl, is_virtual, virtual_index);
+        bool is_override = false;
+        if (has_base_class)
+        {
+            for (const auto& base_method : base_class->methods)
+            {
+                if (base_method.is_constructor || base_method.name != method_decl.name)
+                {
+                    continue;
+                }
+
+                if (base_method.parameters.size() != method_decl.parameters.size())
+                {
+                    continue;
+                }
+
+                bool same_signature = true;
+                for (std::size_t p = 0; p < method_decl.parameters.size(); ++p)
+                {
+                    if (base_method.parameters[p].type.pinvoke_name != method_decl.parameters[p].type.pinvoke_name)
+                    {
+                        same_signature = false;
+                        break;
+                    }
+                }
+
+                if (same_signature)
+                {
+                    is_override = true;
+                    break;
+                }
+            }
+        }
+
+        append_wrapper_method(output, module_decl, module_name, class_decl, method_decl, is_virtual, is_override,
+            virtual_index);
     }
 
     output.append_line("}");

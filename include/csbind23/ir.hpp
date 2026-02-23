@@ -95,6 +95,8 @@ struct ClassDecl
 {
     std::string name;
     std::string cpp_name;
+    std::string base_name;
+    std::string base_cpp_name;
     bool enable_virtual_overrides = false;
     std::vector<FunctionDecl> methods;
 };

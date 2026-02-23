@@ -438,7 +438,7 @@ TEST(BindingsGeneratorTests, EmitsPolymorphicWrapArtifactsForBoundClassPointers)
     auto module = generator.module("poly");
     module.def("make_poly", &make_poly, csbind23::Ownership::Borrowed);
     module.class_<PolyBase>().def_virtual<&PolyBase::kind>();
-    module.class_<PolyDerived>().def<&PolyDerived::kind>();
+    module.class_<PolyDerived, PolyBase>().def<&PolyDerived::kind>();
 
     const auto cabi_path = output_root() / "generated" / "cabi_poly";
     const auto csharp_path = output_root() / "generated" / "csharp_poly";
@@ -455,11 +455,15 @@ TEST(BindingsGeneratorTests, EmitsPolymorphicWrapArtifactsForBoundClassPointers)
     EXPECT_NE(cabi_content.find("poly_PolyDerived_static_type_name"), std::string::npos);
 
     const auto module_csharp = find_file_ending_with(csharp_files, "poly.g.cs");
+    const auto derived_csharp = find_file_ending_with(csharp_files, "poly.PolyDerived.g.cs");
     ASSERT_TRUE(module_csharp.has_value());
+    ASSERT_TRUE(derived_csharp.has_value());
     const std::string csharp_module_content = read_text(*module_csharp);
+    const std::string csharp_derived_content = read_text(*derived_csharp);
     EXPECT_NE(csharp_module_content.find("internal static class polyRuntime"), std::string::npos);
     EXPECT_NE(csharp_module_content.find("WrapPolymorphic_PolyBase"), std::string::npos);
     EXPECT_NE(csharp_module_content.find("public static object make_poly(bool arg0)"), std::string::npos);
+    EXPECT_NE(csharp_derived_content.find("public sealed class PolyDerived : PolyBase"), std::string::npos);
 }
 
 TEST(BindingsGeneratorTests, EmitsConfiguredPInvokeLibraryName)

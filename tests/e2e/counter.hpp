@@ -91,7 +91,7 @@ inline void register_bindings(BindingsGenerator& generator, std::string_view mod
         .def<&counter::Accumulator::add_through_native>()
         .def<&counter::Accumulator::read_through_native>();
 
-    module.class_<counter::FancyAccumulator>()
+    module.class_<counter::FancyAccumulator, counter::Accumulator>()
         .def<&counter::FancyAccumulator::add>();
 
     register_string_bindings(generator, module_name);

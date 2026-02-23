@@ -74,7 +74,7 @@ void register_bindings(csbind23::BindingsGenerator& generator)
         .def<&domain::Counter::increment_through_native>()
         .def<&domain::Counter::read_through_native>();
 
-    module.class_<domain::FancyCounter>()
+    module.class_<domain::FancyCounter, domain::Counter>()
         .def<&domain::FancyCounter::increment>();
 }
 
