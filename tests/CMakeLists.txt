@@ -9,17 +9,17 @@ CPMAddPackage(
         "INSTALL_GTEST OFF"
 )
 
-enable_testing()
-
-add_executable(csbind23_tests
+add_executable(native.tests
     bindings_generator_tests.cpp
 )
 
-target_link_libraries(csbind23_tests
+target_link_libraries(native.tests
     PRIVATE
-        csbind23::bindings_generator
+        csbind23
         GTest::gtest_main
 )
 
 include(GoogleTest)
-gtest_discover_tests(csbind23_tests)
+gtest_discover_tests(native.tests)
+
+add_subdirectory(e2e)

@@ -3,15 +3,18 @@
 #include <string>
 #include <vector>
 
-namespace csbind23 {
+namespace csbind23
+{
 
-enum class Ownership {
+enum class Ownership
+{
     Auto,
     Borrowed,
     Owned,
 };
 
-struct TypeRef {
+struct TypeRef
+{
     std::string cpp_name;
     std::string c_abi_name;
     std::string pinvoke_name;
@@ -20,12 +23,14 @@ struct TypeRef {
     bool is_reference = false;
 };
 
-struct ParameterDecl {
+struct ParameterDecl
+{
     std::string name;
     TypeRef type;
 };
 
-struct FunctionDecl {
+struct FunctionDecl
+{
     std::string name;
     std::string cpp_symbol;
     TypeRef return_type;
@@ -38,38 +43,48 @@ struct FunctionDecl {
     std::string class_name;
 };
 
-inline Ownership infer_ownership(const FunctionDecl& function_decl) {
-    if (function_decl.return_ownership != Ownership::Auto) {
+inline Ownership infer_ownership(const FunctionDecl& function_decl)
+{
+    if (function_decl.return_ownership != Ownership::Auto)
+    {
         return function_decl.return_ownership;
     }
 
-    if (function_decl.is_constructor) {
+    if (function_decl.is_constructor)
+    {
         return Ownership::Owned;
     }
 
-    if (function_decl.return_type.is_pointer || function_decl.return_type.is_reference) {
+    if (function_decl.return_type.is_pointer || function_decl.return_type.is_reference)
+    {
         return Ownership::Borrowed;
     }
 
-    if (function_decl.return_type.c_abi_name == "void*" || function_decl.return_type.c_abi_name == "const void*") {
+    if (function_decl.return_type.c_abi_name == "void*" || function_decl.return_type.c_abi_name == "const void*")
+    {
         return Ownership::Borrowed;
     }
 
-    if (function_decl.return_type.cpp_name == "void" && !function_decl.return_type.is_pointer && !function_decl.return_type.is_reference) {
+    if (function_decl.return_type.cpp_name == "void" && !function_decl.return_type.is_pointer
+        && !function_decl.return_type.is_reference)
+    {
         return Ownership::Borrowed;
     }
 
     return Ownership::Owned;
 }
 
-struct ClassDecl {
+struct ClassDecl
+{
     std::string name;
     std::string cpp_name;
     std::vector<FunctionDecl> methods;
 };
 
-struct ModuleDecl {
+struct ModuleDecl
+{
     std::string name;
+    std::string pinvoke_library;
     std::vector<std::string> cabi_includes;
     std::vector<FunctionDecl> functions;
     std::vector<ClassDecl> classes;

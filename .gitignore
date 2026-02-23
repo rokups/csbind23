@@ -3,3 +3,4 @@ example/generated/
 compile_commands.json
 build
 .vscode
+.CMakeLast.props

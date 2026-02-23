@@ -1,3 +1,5 @@
+#include "csbind23/bindings_generator.hpp"
+
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -6,29 +8,28 @@
 #include <sstream>
 #include <string>
 
-#include "csbind23/bindings_generator.hpp"
+namespace
+{
 
-namespace {
-
-int add(int left, int right) {
+int add(int left, int right)
+{
     return left + right;
 }
 
-struct Counter {
-    int increment(int value) {
-        return value + 1;
-    }
+struct Counter
+{
+    int increment(int value) { return value + 1; }
 
-    int read() const {
-        return 42;
-    }
+    int read() const { return 42; }
 };
 
-std::filesystem::path output_root() {
+std::filesystem::path output_root()
+{
     return std::filesystem::temp_directory_path() / "csbind23_codegen_tests";
 }
 
-std::string read_text(const std::filesystem::path& path) {
+std::string read_text(const std::filesystem::path& path)
+{
     std::ifstream input(path);
     std::ostringstream buffer;
     buffer << input.rdbuf();
@@ -36,11 +37,12 @@ std::string read_text(const std::filesystem::path& path) {
 }
 
 std::optional<std::filesystem::path> find_file_ending_with(
-    const std::vector<std::filesystem::path>& files,
-    std::string_view suffix
-) {
-    for (const auto& file : files) {
-        if (file.filename().string().ends_with(suffix)) {
+    const std::vector<std::filesystem::path>& files, std::string_view suffix)
+{
+    for (const auto& file : files)
+    {
+        if (file.filename().string().ends_with(suffix))
+        {
             return file;
         }
     }
@@ -49,7 +51,8 @@ std::optional<std::filesystem::path> find_file_ending_with(
 
 } // namespace
 
-TEST(BindingsGeneratorTests, CapturesDeclarationsIntoModuleIr) {
+TEST(BindingsGeneratorTests, CapturesDeclarationsIntoModuleIr)
+{
     csbind23::BindingsGenerator generator;
 
     auto module = generator.module("math");
@@ -82,14 +85,10 @@ TEST(BindingsGeneratorTests, CapturesDeclarationsIntoModuleIr) {
     EXPECT_EQ(csbind23::infer_ownership(read_decl), csbind23::Ownership::Borrowed);
 }
 
-TEST(BindingsGeneratorTests, GeneratesCabiAndCsharpArtifacts) {
+TEST(BindingsGeneratorTests, GeneratesCabiAndCsharpArtifacts)
+{
     csbind23::BindingsGenerator generator;
-    generator.module("math")
-        .def<&add>()
-        .class_<Counter>()
-            .ctor<>()
-            .def<&Counter::increment>()
-            .def<&Counter::read>();
+    generator.module("math").def<&add>().class_<Counter>().ctor<>().def<&Counter::increment>().def<&Counter::read>();
 
     const auto cabi_path = output_root() / "generated" / "cabi";
     const auto csharp_path = output_root() / "generated" / "csharp";
@@ -116,9 +115,13 @@ TEST(BindingsGeneratorTests, GeneratesCabiAndCsharpArtifacts) {
     EXPECT_NE(cabi_content.find("csbind23::cabi::Converter<int>::from_c_abi(arg0)"), std::string::npos);
 
     const std::string csharp_module_content = read_text(*module_csharp);
+    EXPECT_NE(csharp_module_content.find("[System.Runtime.InteropServices.DllImport(\"math\""),
+        std::string::npos);
     EXPECT_NE(csharp_module_content.find("internal static extern int math_add("), std::string::npos);
-    EXPECT_NE(csharp_module_content.find("internal static extern System.IntPtr math_Counter_create("), std::string::npos);
-    EXPECT_NE(csharp_module_content.find("internal static extern void math_Counter_destroy(System.IntPtr self);"), std::string::npos);
+    EXPECT_NE(
+        csharp_module_content.find("internal static extern System.IntPtr math_Counter_create("), std::string::npos);
+    EXPECT_NE(csharp_module_content.find("internal static extern void math_Counter_destroy(System.IntPtr self);"),
+        std::string::npos);
     EXPECT_NE(csharp_module_content.find("public static class mathApi"), std::string::npos);
 
     const std::string csharp_class_content = read_text(*class_csharp);
@@ -126,15 +129,16 @@ TEST(BindingsGeneratorTests, GeneratesCabiAndCsharpArtifacts) {
     EXPECT_NE(csharp_class_content.find("public int increment(int arg0)"), std::string::npos);
 }
 
-TEST(BindingsGeneratorTests, AutoAndOverrideNamesAreSupported) {
+TEST(BindingsGeneratorTests, AutoAndOverrideNamesAreSupported)
+{
     csbind23::BindingsGenerator generator;
 
     generator.module("names")
         .def<&add>()
         .def<&add>("sum")
         .class_<Counter>()
-            .def<&Counter::increment>()
-            .def<&Counter::read>("peek");
+        .def<&Counter::increment>()
+        .def<&Counter::read>("peek");
 
     ASSERT_EQ(generator.modules().size(), 1U);
     const auto& module_ir = generator.modules().front();
@@ -153,4 +157,22 @@ TEST(BindingsGeneratorTests, AutoAndOverrideNamesAreSupported) {
     ASSERT_EQ(class_ir.methods.size(), 2U);
     EXPECT_EQ(class_ir.methods[0].name, "increment");
     EXPECT_EQ(class_ir.methods[1].name, "peek");
+}
+
+TEST(BindingsGeneratorTests, EmitsConfiguredPInvokeLibraryName)
+{
+    csbind23::BindingsGenerator generator;
+
+    auto module = generator.module("math");
+    module.pinvoke_library("math.C").def<&add>();
+
+    const auto csharp_path = output_root() / "generated" / "csharp_custom_pinvoke";
+    std::filesystem::remove_all(csharp_path);
+
+    const auto csharp_files = generator.generate_csharp(csharp_path);
+    const auto module_csharp = find_file_ending_with(csharp_files, "math.g.cs");
+    ASSERT_TRUE(module_csharp.has_value());
+
+    const std::string csharp_module_content = read_text(*module_csharp);
+    EXPECT_NE(csharp_module_content.find("[System.Runtime.InteropServices.DllImport(\"math.C\""), std::string::npos);
 }

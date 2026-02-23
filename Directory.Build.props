@@ -1,0 +1,21 @@
+<Project>
+  <Import Project="$(SolutionDir)/CMake.props" Condition=" '$(CMakePropsIncluded)' == '' And '$(SolutionDir)' != '' And Exists('$(SolutionDir)/CMake.props')" />
+  <Import Project="$(CMAKE_BINARY_DIR)/CMake.props" Condition=" '$(CMakePropsIncluded)' == '' And '$(CMAKE_BINARY_DIR)' != '' And Exists('$(CMAKE_BINARY_DIR)/CMake.props')" />
+  <Import Project="$(MSBuildThisFileDirectory).CMakeLast.props" Condition=" '$(CMakePropsIncluded)' == '' And Exists('$(MSBuildThisFileDirectory).CMakeLast.props')" />
+  <Import Project="$(MSBuildStartupDirectory)/CMake.props" Condition=" '$(CMakePropsIncluded)' == '' And Exists('$(MSBuildStartupDirectory)/CMake.props')" />
+
+  <PropertyGroup>
+    <IsCSharpProject Condition="'$(MSBuildProjectExtension)' == '.csproj'">true</IsCSharpProject>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsCSharpProject)' == 'true' And '$(CMAKE_BINARY_DIR)' != ''">
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$(CMAKE_BINARY_DIR)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">$(CMAKE_BINARY_DIR)/bin/$(Configuration)/</BaseOutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsCSharpProject)' == 'true' And '$(CMAKE_BINARY_DIR)' != ''">
+    <OutDir Condition="'$(OutDir)' == ''">$(BaseOutputPath)</OutDir>
+    <OutputPath Condition="'$(OutputPath)' == ''">$(BaseOutputPath)</OutputPath>
+  </PropertyGroup>
+</Project>
