@@ -147,6 +147,12 @@ class ClassBuilder
 public:
     ClassBuilder(BindingsGenerator& owner, ClassDecl& class_decl);
 
+    ClassBuilder& enable_virtual_overrides(bool enabled = true)
+    {
+        class_decl_->enable_virtual_overrides = enabled;
+        return *this;
+    }
+
     template <auto MethodPtr> ClassBuilder& def(Ownership return_ownership = Ownership::Auto)
     {
         return def(detail::function_export_name<MethodPtr>(), MethodPtr, return_ownership);
@@ -195,9 +201,40 @@ public:
         return *this;
     }
 
+    template <auto MethodPtr> ClassBuilder& def_virtual(Ownership return_ownership = Ownership::Auto)
+    {
+        return def_virtual(detail::function_export_name<MethodPtr>(), MethodPtr, return_ownership);
+    }
+
+    template <auto MethodPtr>
+    ClassBuilder& def_virtual(std::string_view name, Ownership return_ownership = Ownership::Auto)
+    {
+        return def_virtual(name, MethodPtr, return_ownership);
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    ClassBuilder& def_virtual(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...),
+        Ownership return_ownership = Ownership::Auto)
+    {
+        (void)method_ptr;
+        class_decl_->enable_virtual_overrides = true;
+        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership, true);
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    ClassBuilder& def_virtual(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...) const,
+        Ownership return_ownership = Ownership::Auto)
+    {
+        (void)method_ptr;
+        class_decl_->enable_virtual_overrides = true;
+        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership, true);
+        return *this;
+    }
+
 private:
     template <typename ClassType, typename ReturnType, typename... Args>
-    void add_method(std::string_view name, bool is_const, Ownership return_ownership)
+    void add_method(std::string_view name, bool is_const, Ownership return_ownership, bool allow_override = false)
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
@@ -206,7 +243,11 @@ private:
         method_decl.return_ownership = return_ownership;
         method_decl.is_method = true;
         method_decl.is_const = is_const;
+        method_decl.is_virtual = allow_override;
+        method_decl.allow_override = allow_override;
         method_decl.class_name = class_decl_->cpp_name;
+        method_decl.virtual_slot_name = std::string(name);
+        method_decl.base_cpp_symbol = std::string(name);
 
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;

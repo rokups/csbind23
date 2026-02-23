@@ -31,6 +31,28 @@ int Counter::read() const
     return value_;
 }
 
+int Counter::increment_through_native(int delta)
+{
+    return increment(delta);
+}
+
+int Counter::read_through_native() const
+{
+    return read();
+}
+
+int FancyCounter::increment(int delta)
+{
+    return Counter::increment(delta) + 1000;
+}
+
+Counter* make_polymorphic_counter(bool derived)
+{
+    static Counter base_counter{10};
+    static FancyCounter fancy_counter{10};
+    return derived ? static_cast<Counter*>(&fancy_counter) : static_cast<Counter*>(&base_counter);
+}
+
 } // namespace example::domain
 
 namespace example
@@ -53,10 +75,21 @@ void register_bindings(csbind23::BindingsGenerator& generator)
         .cabi_include("\"example/bindings_declarations.hpp\"")
         .def<&domain::add>()
         .def<&domain::scale>()
-        .class_<domain::Counter>()
+        .def(
+            "make_polymorphic_counter",
+            &domain::make_polymorphic_counter,
+            csbind23::Ownership::Borrowed,
+            "example::domain::make_polymorphic_counter");
+
+    module.class_<domain::Counter>()
         .ctor<int>()
-        .def<&domain::Counter::increment>()
-        .def<&domain::Counter::read>();
+        .def_virtual<&domain::Counter::increment>()
+        .def_virtual<&domain::Counter::read>()
+        .def<&domain::Counter::increment_through_native>()
+        .def<&domain::Counter::read_through_native>();
+
+    module.class_<domain::FancyCounter>()
+        .def<&domain::FancyCounter::increment>();
 }
 
 } // namespace example

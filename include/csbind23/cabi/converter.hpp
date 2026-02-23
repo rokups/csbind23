@@ -195,10 +195,20 @@ template <typename Type> struct Converter<const Type&>
 
 template <typename Type> std::string c_abi_type_name_for()
 {
-    using Bare = std::remove_cv_t<std::remove_reference_t<Type>>;
-    if constexpr (std::is_pointer_v<Bare> || std::is_reference_v<Type>)
+    using NoRef = std::remove_reference_t<Type>;
+    using Bare = std::remove_cv_t<NoRef>;
+    if constexpr (std::is_pointer_v<NoRef> || std::is_reference_v<Type>)
     {
-        if constexpr (std::is_const_v<std::remove_pointer_t<Bare>>)
+        if constexpr (std::is_reference_v<Type>)
+        {
+            if constexpr (std::is_const_v<NoRef>)
+            {
+                return "const void*";
+            }
+            return "void*";
+        }
+
+        if constexpr (std::is_const_v<std::remove_pointer_t<NoRef>>)
         {
             return "const void*";
         }

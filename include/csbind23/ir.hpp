@@ -51,7 +51,13 @@ struct FunctionDecl
     bool is_constructor = false;
     bool is_method = false;
     bool is_const = false;
+    bool is_virtual = false;
+    bool is_pure_virtual = false;
+    bool is_final = false;
+    bool allow_override = false;
     std::string class_name;
+    std::string virtual_slot_name;
+    std::string base_cpp_symbol;
 };
 
 inline Ownership infer_ownership(const FunctionDecl& function_decl)
@@ -89,6 +95,7 @@ struct ClassDecl
 {
     std::string name;
     std::string cpp_name;
+    bool enable_virtual_overrides = false;
     std::vector<FunctionDecl> methods;
 };
 
