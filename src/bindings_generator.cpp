@@ -62,14 +62,42 @@ ModuleDecl& BindingsGenerator::upsert_module(std::string_view name)
     return modules_.back();
 }
 
+std::string BindingsGenerator::managed_converter_key(const TypeRef& type_ref)
+{
+    return type_ref.cpp_name + "|" + (type_ref.is_const ? "1" : "0") + "|" + (type_ref.is_pointer ? "1" : "0")
+        + "|" + (type_ref.is_reference ? "1" : "0");
+}
+
+void BindingsGenerator::apply_managed_converter(TypeRef& type_ref) const
+{
+    const auto exact_it = managed_converters_.find(managed_converter_key(type_ref));
+    if (exact_it != managed_converters_.end())
+    {
+        type_ref.managed_converter = exact_it->second;
+        return;
+    }
+
+    TypeRef unqualified = type_ref;
+    unqualified.is_const = false;
+    unqualified.is_pointer = false;
+    unqualified.is_reference = false;
+
+    const auto bare_it = managed_converters_.find(managed_converter_key(unqualified));
+    if (bare_it != managed_converters_.end())
+    {
+        type_ref.managed_converter = bare_it->second;
+    }
+}
+
 ModuleBuilder::ModuleBuilder(BindingsGenerator& owner, ModuleDecl& module_decl)
     : owner_(&owner)
     , module_decl_(&module_decl)
 {
 }
 
-ClassBuilder::ClassBuilder(ClassDecl& class_decl)
-    : class_decl_(&class_decl)
+ClassBuilder::ClassBuilder(BindingsGenerator& owner, ClassDecl& class_decl)
+    : owner_(&owner)
+    , class_decl_(&class_decl)
 {
 }
 

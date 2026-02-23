@@ -1,4 +1,5 @@
 #include "csbind23/bindings_generator.hpp"
+#include "csbind23/cabi/converter.hpp"
 
 #include <gtest/gtest.h>
 
@@ -10,6 +11,26 @@
 
 namespace
 {
+
+struct FinalizableValue
+{
+    int payload = 0;
+    int* finalize_call_count = nullptr;
+
+    ~FinalizableValue()
+    {
+        if (finalize_call_count != nullptr)
+        {
+            ++(*finalize_call_count);
+        }
+    }
+};
+
+struct FinalizableValueAbi
+{
+    int payload = 0;
+    int* finalize_call_count = nullptr;
+};
 
 int add(int left, int right)
 {
@@ -50,6 +71,46 @@ std::optional<std::filesystem::path> find_file_ending_with(
 }
 
 } // namespace
+
+namespace csbind23::cabi
+{
+
+template <> struct Converter<FinalizableValue>
+{
+    using cpp_type = FinalizableValue;
+    using c_abi_type = FinalizableValueAbi;
+
+    static constexpr std::string_view c_abi_type_name() { return "FinalizableValueAbi"; }
+
+    static constexpr std::string_view pinvoke_type_name() { return "int"; }
+
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        return c_abi_type{.payload = value.payload, .finalize_call_count = value.finalize_call_count};
+    }
+
+    static cpp_type from_c_abi(const c_abi_type& value)
+    {
+        return cpp_type{.payload = value.payload, .finalize_call_count = value.finalize_call_count};
+    }
+};
+
+} // namespace csbind23::cabi
+
+TEST(ConverterFinalizationTests, CallsConverterDestructorAfterFromCAbi)
+{
+    int converter_finalize_call_count = 0;
+
+    {
+        auto converted = csbind23::cabi::Converter<FinalizableValue>::from_c_abi(
+            FinalizableValueAbi{.payload = 7, .finalize_call_count = &converter_finalize_call_count});
+
+        EXPECT_EQ(converted.payload, 7);
+        EXPECT_EQ(converter_finalize_call_count, 0);
+    }
+
+    EXPECT_EQ(converter_finalize_call_count, 1);
+}
 
 TEST(BindingsGeneratorTests, CapturesDeclarationsIntoModuleIr)
 {
@@ -112,7 +173,8 @@ TEST(BindingsGeneratorTests, GeneratesCabiAndCsharpArtifacts)
     EXPECT_NE(cabi_content.find("extern \"C\" int math_add("), std::string::npos);
     EXPECT_NE(cabi_content.find("math_Counter_create"), std::string::npos);
     EXPECT_NE(cabi_content.find("math_Counter_destroy"), std::string::npos);
-    EXPECT_NE(cabi_content.find("csbind23::cabi::Converter<int>::from_c_abi(arg0)"), std::string::npos);
+    EXPECT_NE(cabi_content.find("decltype(auto) __csbind23_arg0_cpp = csbind23::cabi::Converter<int>::from_c_abi(arg0);"), std::string::npos);
+    EXPECT_NE(cabi_content.find("decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<"), std::string::npos);
 
     const std::string csharp_module_content = read_text(*module_csharp);
     EXPECT_NE(csharp_module_content.find("[System.Runtime.InteropServices.DllImport(\"math\""),
@@ -175,4 +237,40 @@ TEST(BindingsGeneratorTests, EmitsConfiguredPInvokeLibraryName)
 
     const std::string csharp_module_content = read_text(*module_csharp);
     EXPECT_NE(csharp_module_content.find("[System.Runtime.InteropServices.DllImport(\"math.C\""), std::string::npos);
+}
+
+TEST(BindingsGeneratorTests, EmitsInlineManagedConvertersInCsharpWrappers)
+{
+    csbind23::BindingsGenerator generator;
+
+    csbind23::ManagedInlineConverter int_converter;
+    int_converter.managed_type_name = "MyInt";
+    int_converter.to_pinvoke_expression = "Converters.ToNative({value})";
+    int_converter.from_pinvoke_expression = "Converters.FromNative({value})";
+    int_converter.finalize_to_pinvoke_statement = "Converters.FinalizeInput({managed}, {pinvoke})";
+    int_converter.finalize_from_pinvoke_statement = "Converters.FinalizeOutput({managed}, {pinvoke})";
+
+    generator.managed_converter<int>(int_converter);
+    generator.module("math").def<&add>();
+
+    const auto csharp_path = output_root() / "generated" / "csharp_inline_managed";
+    std::filesystem::remove_all(csharp_path);
+
+    const auto csharp_files = generator.generate_csharp(csharp_path);
+    const auto module_csharp = find_file_ending_with(csharp_files, "math.g.cs");
+    ASSERT_TRUE(module_csharp.has_value());
+
+    const std::string csharp_module_content = read_text(*module_csharp);
+    EXPECT_NE(csharp_module_content.find("internal static extern int math_add(int arg0, int arg1);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("public static MyInt add(MyInt arg0, MyInt arg1)"), std::string::npos);
+    EXPECT_NE(csharp_module_content.find("int __csbind23_arg0_pinvoke = Converters.ToNative(arg0);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("MyInt __csbind23_result_managed = default!;"), std::string::npos);
+    EXPECT_NE(csharp_module_content.find("__csbind23_result_managed = Converters.FromNative(__csbind23_result_pinvoke);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("Converters.FinalizeInput(arg0, __csbind23_arg0_pinvoke);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("Converters.FinalizeOutput(__csbind23_result_managed, __csbind23_result_pinvoke);"),
+        std::string::npos);
 }

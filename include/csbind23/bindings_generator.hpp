@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace csbind23
@@ -26,10 +27,28 @@ public:
     std::vector<std::filesystem::path> generate_cabi(const std::filesystem::path& output_root) const;
     std::vector<std::filesystem::path> generate_csharp(const std::filesystem::path& output_root) const;
 
+    template <typename Type> BindingsGenerator& managed_converter(ManagedInlineConverter converter)
+    {
+        TypeRef type_ref = detail::make_type_ref<Type>();
+        const std::string key = managed_converter_key(type_ref);
+        managed_converters_[key] = std::move(converter);
+        return *this;
+    }
+
+    template <typename Type> TypeRef make_bound_type_ref() const
+    {
+        TypeRef type_ref = detail::make_type_ref<Type>();
+        apply_managed_converter(type_ref);
+        return type_ref;
+    }
+
 private:
     ModuleDecl& upsert_module(std::string_view name);
+    void apply_managed_converter(TypeRef& type_ref) const;
+    static std::string managed_converter_key(const TypeRef& type_ref);
 
     std::vector<ModuleDecl> modules_;
+    std::unordered_map<std::string, ManagedInlineConverter> managed_converters_;
 };
 
 class ModuleBuilder
@@ -94,13 +113,13 @@ public:
         FunctionDecl function_decl;
         function_decl.name = std::string(name);
         function_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
-        function_decl.return_type = detail::make_type_ref<ReturnType>();
+        function_decl.return_type = owner_->make_bound_type_ref<ReturnType>();
         function_decl.return_ownership = return_ownership;
 
         function_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((function_decl.parameters.push_back(
-             ParameterDecl{"arg" + std::to_string(index++), detail::make_type_ref<Args>()})),
+               ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_type_ref<Args>()})),
             ...);
 
         module_decl_->functions.push_back(std::move(function_decl));
@@ -126,7 +145,7 @@ private:
 class ClassBuilder
 {
 public:
-    explicit ClassBuilder(ClassDecl& class_decl);
+    ClassBuilder(BindingsGenerator& owner, ClassDecl& class_decl);
 
     template <auto MethodPtr> ClassBuilder& def(Ownership return_ownership = Ownership::Auto)
     {
@@ -143,7 +162,7 @@ public:
         FunctionDecl ctor_decl;
         ctor_decl.name = "__ctor";
         ctor_decl.cpp_symbol = class_decl_->cpp_name;
-        ctor_decl.return_type = detail::make_type_ref<void*>();
+        ctor_decl.return_type = owner_->make_bound_type_ref<void*>();
         ctor_decl.return_ownership = ownership;
         ctor_decl.is_constructor = true;
         ctor_decl.class_name = class_decl_->cpp_name;
@@ -151,7 +170,7 @@ public:
         ctor_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((ctor_decl.parameters.push_back(
-             ParameterDecl{"arg" + std::to_string(index++), detail::make_type_ref<Args>()})),
+               ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_type_ref<Args>()})),
             ...);
 
         class_decl_->methods.push_back(std::move(ctor_decl));
@@ -183,7 +202,7 @@ private:
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
         method_decl.cpp_symbol = std::string(name);
-        method_decl.return_type = detail::make_type_ref<ReturnType>();
+        method_decl.return_type = owner_->make_bound_type_ref<ReturnType>();
         method_decl.return_ownership = return_ownership;
         method_decl.is_method = true;
         method_decl.is_const = is_const;
@@ -192,12 +211,13 @@ private:
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((method_decl.parameters.push_back(
-             ParameterDecl{"arg" + std::to_string(index++), detail::make_type_ref<Args>()})),
+               ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_type_ref<Args>()})),
             ...);
 
         class_decl_->methods.push_back(std::move(method_decl));
     }
 
+    BindingsGenerator* owner_;
     ClassDecl* class_decl_;
 };
 
@@ -207,7 +227,7 @@ template <typename ClassType> ClassBuilder ModuleBuilder::class_(std::string_vie
     class_decl.name = std::string(name);
     class_decl.cpp_name = std::string(cpp_name);
     module_decl_->classes.push_back(std::move(class_decl));
-    return ClassBuilder(module_decl_->classes.back());
+    return ClassBuilder(*owner_, module_decl_->classes.back());
 }
 
 } // namespace csbind23

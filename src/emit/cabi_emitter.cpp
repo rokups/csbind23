@@ -31,10 +31,25 @@ std::string render_cpp_type(const TypeRef& type_ref)
     return rendered;
 }
 
-std::string render_argument_expr(const ParameterDecl& parameter)
+std::string render_converted_argument_name(std::size_t index)
 {
-    return std::format(
-        "csbind23::cabi::Converter<{}>::from_c_abi({})", render_cpp_type(parameter.type), parameter.name);
+    return std::format("__csbind23_arg{}_cpp", index);
+}
+
+void append_converted_arguments(TextWriter& output, const std::vector<ParameterDecl>& parameters)
+{
+    for (std::size_t index = 0; index < parameters.size(); ++index)
+    {
+        const auto& parameter = parameters[index];
+        const auto converted_name = render_converted_argument_name(index);
+        const auto rendered_cpp_type = render_cpp_type(parameter.type);
+
+        output.append_line_format(
+            "    decltype(auto) {} = csbind23::cabi::Converter<{}>::from_c_abi({});",
+            converted_name,
+            rendered_cpp_type,
+            parameter.name);
+    }
 }
 
 std::string render_call_arguments(const std::vector<ParameterDecl>& parameters)
@@ -42,7 +57,7 @@ std::string render_call_arguments(const std::vector<ParameterDecl>& parameters)
     std::string arguments;
     for (std::size_t index = 0; index < parameters.size(); ++index)
     {
-        arguments += render_argument_expr(parameters[index]);
+        arguments += render_converted_argument_name(index);
         if (index + 1 < parameters.size())
         {
             arguments += ", ";
@@ -83,6 +98,7 @@ void append_method_signature(TextWriter& output, const FunctionDecl& function_de
 
 void append_free_function_body(TextWriter& output, const FunctionDecl& function_decl)
 {
+    append_converted_arguments(output, function_decl.parameters);
     const std::string call_arguments = render_call_arguments(function_decl.parameters);
     if (function_decl.return_type.c_abi_name == "void")
     {
@@ -97,6 +113,7 @@ void append_free_function_body(TextWriter& output, const FunctionDecl& function_
 
 void append_constructor_body(TextWriter& output, const ClassDecl& class_decl, const FunctionDecl& ctor_decl)
 {
+    append_converted_arguments(output, ctor_decl.parameters);
     const std::string call_arguments = render_call_arguments(ctor_decl.parameters);
     const Ownership ownership = infer_ownership(ctor_decl);
 
@@ -115,13 +132,19 @@ void append_method_body(TextWriter& output, const ClassDecl& class_decl, const F
     if (method_decl.is_const)
     {
         output.append_line_format(
-            "    auto* instance = csbind23::cabi::Converter<const {}*>::from_c_abi(self);", class_decl.cpp_name);
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<const {}*>::from_c_abi(self);",
+            class_decl.cpp_name);
+        output.append_line("    auto* instance = __csbind23_self_cpp;");
     }
     else
     {
         output.append_line_format(
-            "    auto* instance = csbind23::cabi::Converter<{}*>::from_c_abi(self);", class_decl.cpp_name);
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+            class_decl.cpp_name);
+        output.append_line("    auto* instance = __csbind23_self_cpp;");
     }
+
+    append_converted_arguments(output, method_decl.parameters);
 
     const std::string call_arguments = render_call_arguments(method_decl.parameters);
     if (method_decl.return_type.c_abi_name == "void")
@@ -180,7 +203,10 @@ std::vector<std::filesystem::path> emit_cabi_module(
             generated.append_line_format(
                 "extern \"C\" void {}_{}_destroy(void* self) {{", module_decl.name, class_decl.name);
             generated.append_line_format(
-                "    delete csbind23::cabi::Converter<{}*>::from_c_abi(self);", class_decl.cpp_name);
+                "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+                class_decl.cpp_name);
+            generated.append_line_format(
+                "    delete __csbind23_self_cpp;");
             generated.append_line("}");
             generated.append_line();
         }
