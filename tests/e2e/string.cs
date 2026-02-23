@@ -76,31 +76,31 @@ namespace CsBind23.Tests.E2E
     public class StringBindingE2ETests
     {
         [Fact]
-        public void String_ReturnByValue_Works()
+        public void ReturnByValue_Works()
         {
             Assert.Equal("abc|value", StringE2EConverters.EchoByValue("abc"));
         }
 
         [Fact]
-        public void String_ConstRefParameter_Works()
+        public void ConstRefParameter_Works()
         {
             Assert.Equal("hello|const-ref", StringE2EConverters.ConsumeConstRef("hello"));
         }
 
         [Fact]
-        public void String_ReturnConstRef_Works()
+        public void ReturnConstRef_Works()
         {
             Assert.Equal("const-ref", e2eApi.string_get_const_ref());
         }
 
         [Fact]
-        public void String_ReturnNonConstRef_Works()
+        public void ReturnNonConstRef_Works()
         {
             Assert.Equal("ref", e2eApi.string_get_ref());
         }
 
         [Fact]
-        public void String_RefParameter_AssignsBackToManaged()
+        public void RefParameter_AssignsBackToManaged()
         {
             var value = "before";
             e2eApi.string_assign_by_ref(ref value, "after");
@@ -108,7 +108,7 @@ namespace CsBind23.Tests.E2E
         }
 
         [Fact]
-        public void String_RefAndConstRefParameters_WorkTogether()
+        public void RefAndConstRefParameters_WorkTogether()
         {
             var value = "base";
             e2eApi.string_append_by_const_ref(ref value, "+suffix");
@@ -116,7 +116,7 @@ namespace CsBind23.Tests.E2E
         }
 
         [Fact]
-        public void String_OutputParameter_Works()
+        public void OutputParameter_Works()
         {
             var output = string.Empty;
             e2eApi.string_write_output(ref output);

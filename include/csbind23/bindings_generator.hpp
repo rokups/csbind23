@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
-#include <unordered_map>
+#include <type_traits>
 #include <vector>
 
 namespace csbind23
@@ -27,28 +27,73 @@ public:
     std::vector<std::filesystem::path> generate_cabi(const std::filesystem::path& output_root) const;
     std::vector<std::filesystem::path> generate_csharp(const std::filesystem::path& output_root) const;
 
-    template <typename Type> BindingsGenerator& managed_converter(ManagedInlineConverter converter)
-    {
-        TypeRef type_ref = detail::make_type_ref<Type>();
-        const std::string key = managed_converter_key(type_ref);
-        managed_converters_[key] = std::move(converter);
-        return *this;
-    }
-
     template <typename Type> TypeRef make_bound_type_ref() const
     {
         TypeRef type_ref = detail::make_type_ref<Type>();
-        apply_managed_converter(type_ref);
+        apply_managed_converter<Type>(type_ref);
         return type_ref;
     }
 
 private:
+    template <typename Type, typename = void> struct has_managed_converter_spec : std::false_type
+    {
+    };
+
+    template <typename Type>
+    struct has_managed_converter_spec<Type,
+        std::void_t<decltype(cabi::Converter<Type>::managed_type_name()),
+            decltype(cabi::Converter<Type>::managed_to_pinvoke_expression()),
+            decltype(cabi::Converter<Type>::managed_from_pinvoke_expression()),
+            decltype(cabi::Converter<Type>::managed_finalize_to_pinvoke_statement()),
+            decltype(cabi::Converter<Type>::managed_finalize_from_pinvoke_statement())>> : std::true_type
+    {
+    };
+
+    template <typename Type> static void assign_managed_converter(TypeRef& type_ref)
+    {
+        if constexpr (has_managed_converter_spec<Type>::value)
+        {
+            type_ref.managed_type_name = std::string(cabi::Converter<Type>::managed_type_name());
+            type_ref.managed_to_pinvoke_expression =
+                std::string(cabi::Converter<Type>::managed_to_pinvoke_expression());
+            type_ref.managed_from_pinvoke_expression =
+                std::string(cabi::Converter<Type>::managed_from_pinvoke_expression());
+            type_ref.managed_finalize_to_pinvoke_statement =
+                std::string(cabi::Converter<Type>::managed_finalize_to_pinvoke_statement());
+            type_ref.managed_finalize_from_pinvoke_statement =
+                std::string(cabi::Converter<Type>::managed_finalize_from_pinvoke_statement());
+        }
+    }
+
+    template <typename Type> void apply_managed_converter(TypeRef& type_ref) const
+    {
+        assign_managed_converter<Type>(type_ref);
+        if (type_ref.has_managed_converter())
+        {
+            return;
+        }
+
+        using NoRef = std::remove_reference_t<Type>;
+        using Bare = std::remove_cv_t<NoRef>;
+        if constexpr (!std::is_same_v<Bare, Type>)
+        {
+            assign_managed_converter<Bare>(type_ref);
+            if (type_ref.has_managed_converter())
+            {
+                return;
+            }
+        }
+
+        using Base = std::remove_cv_t<std::remove_pointer_t<Bare>>;
+        if constexpr (!std::is_same_v<Base, Bare>)
+        {
+            assign_managed_converter<Base>(type_ref);
+        }
+    }
+
     ModuleDecl& upsert_module(std::string_view name);
-    void apply_managed_converter(TypeRef& type_ref) const;
-    static std::string managed_converter_key(const TypeRef& type_ref);
 
     std::vector<ModuleDecl> modules_;
-    std::unordered_map<std::string, ManagedInlineConverter> managed_converters_;
 };
 
 class ModuleBuilder

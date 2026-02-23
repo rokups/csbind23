@@ -75,27 +75,55 @@ inline void string_assign(std::string* value, std::string text)
 
 } // namespace csbind23::testing::strings
 
+namespace csbind23::cabi
+{
+
+template <> struct Converter<std::string&>
+{
+    using cpp_type = std::string&;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+
+    static constexpr std::string_view managed_type_name() { return "string"; }
+    static constexpr std::string_view managed_to_pinvoke_expression() { return "StringE2EConverters.ToNative({value})"; }
+    static constexpr std::string_view managed_from_pinvoke_expression() { return "StringE2EConverters.FromNative({value})"; }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return "{managed} = StringE2EConverters.FromNative({pinvoke}); StringE2EConverters.DestroyNative({pinvoke})";
+    }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement() { return ""; }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<std::string*>(value); }
+};
+
+template <> struct Converter<const std::string&>
+{
+    using cpp_type = const std::string&;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+
+    static constexpr std::string_view managed_type_name() { return "string"; }
+    static constexpr std::string_view managed_to_pinvoke_expression() { return "StringE2EConverters.ToNative({value})"; }
+    static constexpr std::string_view managed_from_pinvoke_expression() { return "StringE2EConverters.FromNative({value})"; }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement() { return "StringE2EConverters.DestroyNative({pinvoke})"; }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement() { return ""; }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<const std::string*>(value); }
+};
+
+} // namespace csbind23::cabi
+
 namespace csbind23::testing
 {
 
 inline void register_string_bindings(BindingsGenerator& generator, std::string_view module_name)
 {
-    csbind23::ManagedInlineConverter non_const_ref_converter;
-    non_const_ref_converter.managed_type_name = "string";
-    non_const_ref_converter.to_pinvoke_expression = "StringE2EConverters.ToNative({value})";
-    non_const_ref_converter.from_pinvoke_expression = "StringE2EConverters.FromNative({value})";
-    non_const_ref_converter.finalize_to_pinvoke_statement =
-        "{managed} = StringE2EConverters.FromNative({pinvoke}); StringE2EConverters.DestroyNative({pinvoke})";
-
-    csbind23::ManagedInlineConverter const_ref_converter;
-    const_ref_converter.managed_type_name = "string";
-    const_ref_converter.to_pinvoke_expression = "StringE2EConverters.ToNative({value})";
-    const_ref_converter.from_pinvoke_expression = "StringE2EConverters.FromNative({value})";
-    const_ref_converter.finalize_to_pinvoke_statement = "StringE2EConverters.DestroyNative({pinvoke})";
-
-    generator.managed_converter<std::string&>(non_const_ref_converter);
-    generator.managed_converter<const std::string&>(const_ref_converter);
-
     auto module = generator.module(module_name);
     module.def<&strings::echo_by_value>("string_echo_by_value")
         .def<&strings::consume_const_ref>("string_consume_const_ref")

@@ -34,9 +34,9 @@ std::string pinvoke_return_type(const FunctionDecl& function_decl)
 
 std::string wrapper_type_name(const TypeRef& type_ref)
 {
-    if (type_ref.managed_converter.has_value() && !type_ref.managed_converter->managed_type_name.empty())
+    if (type_ref.has_managed_converter() && !type_ref.managed_type_name.empty())
     {
-        return type_ref.managed_converter->managed_type_name;
+        return type_ref.managed_type_name;
     }
     return type_ref.pinvoke_name;
 }
@@ -61,7 +61,7 @@ const ClassDecl* find_pointer_class_return(const ModuleDecl& module_decl, const 
         return nullptr;
     }
 
-    if (return_type.managed_converter.has_value())
+    if (return_type.has_managed_converter())
     {
         return nullptr;
     }
@@ -253,21 +253,21 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     for (std::size_t index = 0; index < method_decl.parameters.size(); ++index)
     {
         const auto& parameter = method_decl.parameters[index];
-        const auto& converter = parameter.type.managed_converter;
-        if (converter.has_value() && !converter->to_pinvoke_expression.empty())
+        if (!parameter.type.managed_to_pinvoke_expression.empty())
         {
             const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
             output.append_line_format(
                 "        {} {} = {};",
                 parameter.type.pinvoke_name,
                 pinvoke_name,
-                render_inline_template(converter->to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name));
+                render_inline_template(
+                    parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name));
             call_arguments.push_back(pinvoke_name);
 
-            if (!converter->finalize_to_pinvoke_statement.empty())
+            if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
             {
                 finalize_statements.push_back(render_inline_template(
-                    converter->finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
+                    parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
             }
             continue;
         }
@@ -287,10 +287,8 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
         ? std::format("(__csbind23_dispatchDepth{} > 0 ? {} : {})", virtual_index, base_native_call, native_call)
         : native_call;
 
-    const bool has_return_converter = method_decl.return_type.managed_converter.has_value()
-        && !method_decl.return_type.managed_converter->from_pinvoke_expression.empty();
-    const bool has_return_finalize = method_decl.return_type.managed_converter.has_value()
-        && !method_decl.return_type.managed_converter->finalize_from_pinvoke_statement.empty();
+    const bool has_return_converter = !method_decl.return_type.managed_from_pinvoke_expression.empty();
+    const bool has_return_finalize = !method_decl.return_type.managed_finalize_from_pinvoke_statement.empty();
     const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
     const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, method_decl);
 
@@ -369,11 +367,10 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     }
     else
     {
-        const auto& converter = *method_decl.return_type.managed_converter;
         const std::string native_result_name = "__csbind23_result_pinvoke";
         const std::string managed_result_name = "__csbind23_result_managed";
         const std::string converted_expression =
-            render_inline_template(converter.from_pinvoke_expression, managed_result_name, native_result_name,
+            render_inline_template(method_decl.return_type.managed_from_pinvoke_expression, managed_result_name, native_result_name,
                 native_result_name);
 
         if (!needs_finally)
@@ -404,7 +401,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
                 output.append_line_format(
                     "            {};",
                     render_inline_template(
-                        converter.finalize_from_pinvoke_statement, managed_result_name, native_result_name,
+                                method_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name, native_result_name,
                         native_result_name));
             }
             output.append_line("        }");
@@ -549,8 +546,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         for (std::size_t p = 0; p < method_decl.parameters.size(); ++p)
         {
             const auto& parameter = method_decl.parameters[p];
-            const auto& converter = parameter.type.managed_converter;
-            if (converter.has_value() && !converter->from_pinvoke_expression.empty())
+            if (!parameter.type.managed_from_pinvoke_expression.empty())
             {
                 const std::string managed_name = std::format("__csbind23_arg{}_managed", p);
                 output.append_line_format(
@@ -558,7 +554,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
                     wrapper_type_name(parameter.type),
                     managed_name,
                     render_inline_template(
-                        converter->from_pinvoke_expression, managed_name, parameter.name, parameter.name));
+                        parameter.type.managed_from_pinvoke_expression, managed_name, parameter.name, parameter.name));
                 managed_args.push_back(managed_name);
             }
             else
@@ -592,12 +588,11 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
                 method_decl.name,
                 invoke_args);
 
-            const auto& ret_converter = method_decl.return_type.managed_converter;
-            if (ret_converter.has_value() && !ret_converter->to_pinvoke_expression.empty())
+            if (!method_decl.return_type.managed_to_pinvoke_expression.empty())
             {
                 output.append_line_format(
                     "            return {};",
-                    render_inline_template(ret_converter->to_pinvoke_expression, "__csbind23_result",
+                    render_inline_template(method_decl.return_type.managed_to_pinvoke_expression, "__csbind23_result",
                         "__csbind23_result", "__csbind23_result"));
             }
             else
@@ -671,8 +666,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         for (std::size_t index = 0; index < method_decl.parameters.size(); ++index)
         {
             const auto& parameter = method_decl.parameters[index];
-            const auto& converter = parameter.type.managed_converter;
-            if (converter.has_value() && !converter->to_pinvoke_expression.empty())
+            if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
                 output.append_line_format(
@@ -680,12 +674,12 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
                     parameter.type.pinvoke_name,
                     pinvoke_name,
                     render_inline_template(
-                        converter->to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name));
+                        parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name));
                 converted_arguments.push_back(pinvoke_name);
-                if (!converter->finalize_to_pinvoke_statement.empty())
+                if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
-                        converter->finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
+                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
                 }
                 continue;
             }
@@ -962,21 +956,20 @@ std::vector<std::filesystem::path> emit_csharp_module(
         for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
         {
             const auto& parameter = function_decl.parameters[index];
-            const auto& converter = parameter.type.managed_converter;
-            if (converter.has_value() && !converter->to_pinvoke_expression.empty())
+            if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
                 generated.append_line_format(
                     "        {} {} = {};",
                     parameter.type.pinvoke_name,
                     pinvoke_name,
-                    render_inline_template(converter->to_pinvoke_expression, parameter.name, pinvoke_name,
+                    render_inline_template(parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name,
                         parameter.name));
                 call_arguments.push_back(pinvoke_name);
-                if (!converter->finalize_to_pinvoke_statement.empty())
+                if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
-                        converter->finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
+                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
                 }
                 continue;
             }
@@ -986,10 +979,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
         const std::string call_arguments_rendered = join_arguments(call_arguments);
         const std::string native_call = std::format("{}Native.{}({})", module_decl.name, native_name, call_arguments_rendered);
-        const bool has_return_converter = function_decl.return_type.managed_converter.has_value()
-            && !function_decl.return_type.managed_converter->from_pinvoke_expression.empty();
-        const bool has_return_finalize = function_decl.return_type.managed_converter.has_value()
-            && !function_decl.return_type.managed_converter->finalize_from_pinvoke_statement.empty();
+        const bool has_return_converter = !function_decl.return_type.managed_from_pinvoke_expression.empty();
+        const bool has_return_finalize = !function_decl.return_type.managed_finalize_from_pinvoke_statement.empty();
         const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
         const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, function_decl);
 
@@ -1069,11 +1060,10 @@ std::vector<std::filesystem::path> emit_csharp_module(
             }
             else
             {
-                const auto& converter = *function_decl.return_type.managed_converter;
                 const std::string native_result_name = "__csbind23_result_pinvoke";
                 const std::string managed_result_name = "__csbind23_result_managed";
                 const std::string converted_expression =
-                    render_inline_template(converter.from_pinvoke_expression, managed_result_name, native_result_name,
+                    render_inline_template(function_decl.return_type.managed_from_pinvoke_expression, managed_result_name, native_result_name,
                         native_result_name);
 
                 if (!needs_finally)
@@ -1106,7 +1096,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                         generated.append_line_format(
                             "            {};",
                             render_inline_template(
-                                converter.finalize_from_pinvoke_statement, managed_result_name, native_result_name,
+                                function_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name, native_result_name,
                                 native_result_name));
                     }
                     generated.append_line("        }");

@@ -32,9 +32,24 @@ struct FinalizableValueAbi
     int* finalize_call_count = nullptr;
 };
 
+struct ManagedNumber
+{
+    int value = 0;
+};
+
+struct ManagedLong
+{
+    long value = 0;
+};
+
 int add(int left, int right)
 {
     return left + right;
+}
+
+ManagedNumber add_managed(ManagedNumber left, ManagedNumber right)
+{
+    return ManagedNumber{left.value + right.value};
 }
 
 struct Counter
@@ -53,26 +68,26 @@ struct VirtualCounter
     virtual int read() const { return 100; }
 };
 
-struct ConverterSurface
+struct ManagedConverterSurface
 {
-    explicit ConverterSurface(int seed)
+    explicit ManagedConverterSurface(ManagedNumber seed)
         : value(seed)
     {
     }
 
-    int add(int delta)
+    ManagedNumber add(ManagedNumber delta)
     {
-        value += delta;
+        value.value += delta.value;
         return value;
     }
 
-    virtual int addVirtual(int delta)
+    virtual ManagedNumber addVirtual(ManagedNumber delta)
     {
-        value += delta;
+        value.value += delta.value;
         return value;
     }
 
-    int value = 0;
+    ManagedNumber value;
 };
 
 struct PolyBase
@@ -91,6 +106,11 @@ PolyBase* make_poly(bool derived)
     static PolyBase base{};
     static PolyDerived poly_derived{};
     return derived ? static_cast<PolyBase*>(&poly_derived) : static_cast<PolyBase*>(&base);
+}
+
+ManagedLong scale_managed_long(ManagedLong value)
+{
+    return ManagedLong{value.value * 2};
 }
 
 std::filesystem::path output_root()
@@ -133,6 +153,12 @@ template <> struct Converter<FinalizableValue>
 
     static constexpr std::string_view pinvoke_type_name() { return "int"; }
 
+    static constexpr std::string_view managed_type_name() { return ""; }
+    static constexpr std::string_view managed_to_pinvoke_expression() { return ""; }
+    static constexpr std::string_view managed_from_pinvoke_expression() { return ""; }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement() { return ""; }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement() { return ""; }
+
     static c_abi_type to_c_abi(const cpp_type& value)
     {
         return c_abi_type{.payload = value.payload, .finalize_call_count = value.finalize_call_count};
@@ -142,6 +168,42 @@ template <> struct Converter<FinalizableValue>
     {
         return cpp_type{.payload = value.payload, .finalize_call_count = value.finalize_call_count};
     }
+};
+
+template <> struct Converter<ManagedNumber>
+{
+    using cpp_type = ManagedNumber;
+    using c_abi_type = int;
+
+    static constexpr std::string_view c_abi_type_name() { return "int"; }
+    static constexpr std::string_view pinvoke_type_name() { return "int"; }
+
+    static constexpr std::string_view managed_type_name() { return "MyInt"; }
+    static constexpr std::string_view managed_to_pinvoke_expression() { return "Converters.ToNative({value})"; }
+    static constexpr std::string_view managed_from_pinvoke_expression() { return "Converters.FromNative({value})"; }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement() { return "Converters.FinalizeInput({managed}, {pinvoke})"; }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement() { return "Converters.FinalizeOutput({managed}, {pinvoke})"; }
+
+    static c_abi_type to_c_abi(const cpp_type& value) { return value.value; }
+    static cpp_type from_c_abi(const c_abi_type& value) { return cpp_type{value}; }
+};
+
+template <> struct Converter<ManagedLong>
+{
+    using cpp_type = ManagedLong;
+    using c_abi_type = long;
+
+    static constexpr std::string_view c_abi_type_name() { return "long"; }
+    static constexpr std::string_view pinvoke_type_name() { return "nint"; }
+
+    static constexpr std::string_view managed_type_name() { return "MyLong"; }
+    static constexpr std::string_view managed_to_pinvoke_expression() { return "CppConverters.ToNative({value})"; }
+    static constexpr std::string_view managed_from_pinvoke_expression() { return "CppConverters.FromNative({value})"; }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement() { return "CppConverters.FinalizeInput({managed}, {pinvoke})"; }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement() { return "CppConverters.FinalizeOutput({managed}, {pinvoke})"; }
+
+    static c_abi_type to_c_abi(const cpp_type& value) { return value.value; }
+    static cpp_type from_c_abi(const c_abi_type& value) { return cpp_type{value}; }
 };
 
 } // namespace csbind23::cabi
@@ -180,23 +242,16 @@ TEST(BindingsGeneratorTests, AppliesManagedConverterToQualifiedTypeRefs)
 {
     csbind23::BindingsGenerator generator;
 
-    csbind23::ManagedInlineConverter int_converter;
-    int_converter.managed_type_name = "MyInt";
-    int_converter.to_pinvoke_expression = "Converters.ToNative({value})";
-    int_converter.from_pinvoke_expression = "Converters.FromNative({value})";
+    const auto by_value = generator.make_bound_type_ref<ManagedNumber>();
+    const auto by_const_ref = generator.make_bound_type_ref<const ManagedNumber&>();
+    const auto by_pointer = generator.make_bound_type_ref<ManagedNumber*>();
 
-    generator.managed_converter<int>(int_converter);
-
-    const auto by_value = generator.make_bound_type_ref<int>();
-    const auto by_const_ref = generator.make_bound_type_ref<const int&>();
-    const auto by_pointer = generator.make_bound_type_ref<int*>();
-
-    ASSERT_TRUE(by_value.managed_converter.has_value());
-    ASSERT_TRUE(by_const_ref.managed_converter.has_value());
-    ASSERT_TRUE(by_pointer.managed_converter.has_value());
-    EXPECT_EQ(by_value.managed_converter->managed_type_name, "MyInt");
-    EXPECT_EQ(by_const_ref.managed_converter->managed_type_name, "MyInt");
-    EXPECT_EQ(by_pointer.managed_converter->managed_type_name, "MyInt");
+    ASSERT_TRUE(by_value.has_managed_converter());
+    ASSERT_TRUE(by_const_ref.has_managed_converter());
+    ASSERT_TRUE(by_pointer.has_managed_converter());
+    EXPECT_EQ(by_value.managed_type_name, "MyInt");
+    EXPECT_EQ(by_const_ref.managed_type_name, "MyInt");
+    EXPECT_EQ(by_pointer.managed_type_name, "MyInt");
 }
 
 TEST(BindingsGeneratorTests, CapturesDeclarationsIntoModuleIr)
@@ -429,15 +484,7 @@ TEST(BindingsGeneratorTests, EmitsInlineManagedConvertersInCsharpWrappers)
 {
     csbind23::BindingsGenerator generator;
 
-    csbind23::ManagedInlineConverter int_converter;
-    int_converter.managed_type_name = "MyInt";
-    int_converter.to_pinvoke_expression = "Converters.ToNative({value})";
-    int_converter.from_pinvoke_expression = "Converters.FromNative({value})";
-    int_converter.finalize_to_pinvoke_statement = "Converters.FinalizeInput({managed}, {pinvoke})";
-    int_converter.finalize_from_pinvoke_statement = "Converters.FinalizeOutput({managed}, {pinvoke})";
-
-    generator.managed_converter<int>(int_converter);
-    generator.module("math").def<&add>();
+    generator.module("math").def<&add_managed>("add");
 
     const auto csharp_path = output_root() / "generated" / "csharp_inline_managed";
     std::filesystem::remove_all(csharp_path);
@@ -461,23 +508,39 @@ TEST(BindingsGeneratorTests, EmitsInlineManagedConvertersInCsharpWrappers)
         std::string::npos);
 }
 
+TEST(BindingsGeneratorTests, AppliesManagedConverterFromCppSpecialization)
+{
+    csbind23::BindingsGenerator generator;
+    generator.module("spec").def<&scale_managed_long>("scale_long");
+
+    const auto csharp_path = output_root() / "generated" / "csharp_cpp_specialization";
+    std::filesystem::remove_all(csharp_path);
+
+    const auto csharp_files = generator.generate_csharp(csharp_path);
+    const auto module_csharp = find_file_ending_with(csharp_files, "spec.g.cs");
+    ASSERT_TRUE(module_csharp.has_value());
+
+    const std::string csharp_module_content = read_text(*module_csharp);
+    EXPECT_NE(csharp_module_content.find("public static MyLong scale_long(MyLong arg0)"), std::string::npos);
+    EXPECT_NE(csharp_module_content.find("nint __csbind23_arg0_pinvoke = CppConverters.ToNative(arg0);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("CppConverters.FinalizeInput(arg0, __csbind23_arg0_pinvoke);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("__csbind23_result_managed = CppConverters.FromNative(__csbind23_result_pinvoke);"),
+        std::string::npos);
+    EXPECT_NE(csharp_module_content.find("CppConverters.FinalizeOutput(__csbind23_result_managed, __csbind23_result_pinvoke);"),
+        std::string::npos);
+}
+
 TEST(BindingsGeneratorTests, EmitsInlineManagedConvertersInClassAndVirtualWrappers)
 {
     csbind23::BindingsGenerator generator;
 
-    csbind23::ManagedInlineConverter int_converter;
-    int_converter.managed_type_name = "MyInt";
-    int_converter.to_pinvoke_expression = "Converters.ToNative({value})";
-    int_converter.from_pinvoke_expression = "Converters.FromNative({value})";
-    int_converter.finalize_to_pinvoke_statement = "Converters.FinalizeInput({managed}, {pinvoke})";
-    int_converter.finalize_from_pinvoke_statement = "Converters.FinalizeOutput({managed}, {pinvoke})";
-    generator.managed_converter<int>(int_converter);
-
     generator.module("conv")
-        .class_<ConverterSurface>()
-        .ctor<int>()
-        .def<&ConverterSurface::add>()
-        .def_virtual<&ConverterSurface::addVirtual>();
+        .class_<ManagedConverterSurface>("ConverterSurface")
+        .ctor<ManagedNumber>()
+        .def<&ManagedConverterSurface::add>()
+        .def_virtual<&ManagedConverterSurface::addVirtual>();
 
     const auto csharp_path = output_root() / "generated" / "csharp_inline_managed_class";
     std::filesystem::remove_all(csharp_path);

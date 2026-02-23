@@ -1,6 +1,5 @@
 #pragma once
 
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,24 +13,26 @@ enum class Ownership
     Owned,
 };
 
-struct ManagedInlineConverter
-{
-    std::string managed_type_name;
-    std::string to_pinvoke_expression;
-    std::string from_pinvoke_expression;
-    std::string finalize_to_pinvoke_statement;
-    std::string finalize_from_pinvoke_statement;
-};
-
 struct TypeRef
 {
     std::string cpp_name;
     std::string c_abi_name;
     std::string pinvoke_name;
-    std::optional<ManagedInlineConverter> managed_converter;
+    std::string managed_type_name;
+    std::string managed_to_pinvoke_expression;
+    std::string managed_from_pinvoke_expression;
+    std::string managed_finalize_to_pinvoke_statement;
+    std::string managed_finalize_from_pinvoke_statement;
     bool is_const = false;
     bool is_pointer = false;
     bool is_reference = false;
+
+    bool has_managed_converter() const
+    {
+        return !managed_type_name.empty() || !managed_to_pinvoke_expression.empty()
+            || !managed_from_pinvoke_expression.empty() || !managed_finalize_to_pinvoke_statement.empty()
+            || !managed_finalize_from_pinvoke_statement.empty();
+    }
 };
 
 struct ParameterDecl
