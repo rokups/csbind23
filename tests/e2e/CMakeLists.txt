@@ -107,6 +107,7 @@ target_include_directories(${E2E_GENERATOR_TARGET}
 
 add_custom_command(
     OUTPUT ${E2E_GENERATED_STAMP} ${E2E_GENERATED_CABI_FILES}
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${E2E_GENERATED_ROOT}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${E2E_GENERATED_ROOT}
     COMMAND $<TARGET_FILE:${E2E_GENERATOR_TARGET}> ${E2E_GENERATED_ROOT}
     COMMAND ${CMAKE_COMMAND} -E touch ${E2E_GENERATED_STAMP}
@@ -187,6 +188,14 @@ foreach(test_project IN LISTS E2E_TEST_CS_PROJECTS)
     list(APPEND E2E_MANAGED_BUILD_STAMPS ${dotnet_build_stamp})
     list(APPEND E2E_MANAGED_TEST_STAMPS ${dotnet_test_stamp})
 endforeach()
+
+set(E2E_ALL_STAMPS ${E2E_GENERATED_STAMP} ${E2E_MANAGED_BUILD_STAMPS} ${E2E_MANAGED_TEST_STAMPS})
+add_custom_target(e2e.clean.stamps
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${E2E_ALL_STAMPS}
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${E2E_GENERATED_ROOT}
+    COMMENT "Clearing binding-e2e stamp files"
+    VERBATIM
+)
 
 if (E2E_MANAGED_BUILD_STAMPS)
     add_custom_target(e2e.Net

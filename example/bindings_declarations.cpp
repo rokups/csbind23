@@ -75,11 +75,7 @@ void register_bindings(csbind23::BindingsGenerator& generator)
         .cabi_include("\"example/bindings_declarations.hpp\"")
         .def<&domain::add>()
         .def<&domain::scale>()
-        .def(
-            "make_polymorphic_counter",
-            &domain::make_polymorphic_counter,
-            csbind23::Ownership::Borrowed,
-            "example::domain::make_polymorphic_counter");
+        .def<&domain::make_polymorphic_counter>("make_polymorphic_counter");
 
     module.class_<domain::Counter>()
         .ctor<int>()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "csbind23/bindings_generator.hpp"
+#include "tests/e2e/string.hpp"
 
 #include <string_view>
 
@@ -81,11 +82,7 @@ inline void register_bindings(BindingsGenerator& generator, std::string_view mod
     module.pinvoke_library("e2e.C")
         .cabi_include("\"tests/e2e/counter.hpp\"")
         .def<&counter::sum>()
-        .def(
-            "make_polymorphic",
-            &counter::make_polymorphic,
-            Ownership::Borrowed,
-            "csbind23::testing::counter::make_polymorphic");
+        .def<&counter::make_polymorphic>("make_polymorphic");
 
     module.class_<counter::Accumulator>()
         .ctor<int>()
@@ -96,6 +93,8 @@ inline void register_bindings(BindingsGenerator& generator, std::string_view mod
 
     module.class_<counter::FancyAccumulator>()
         .def<&counter::FancyAccumulator::add>();
+
+    register_string_bindings(generator, module_name);
 }
 
 } // namespace csbind23::testing

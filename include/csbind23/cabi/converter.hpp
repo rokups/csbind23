@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -138,7 +140,16 @@ template <> struct Converter<std::string>
 
     static constexpr std::string_view pinvoke_type_name() { return "string"; }
 
-    static c_abi_type to_c_abi(const cpp_type& value) { return value.c_str(); }
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        auto* buffer = static_cast<char*>(std::malloc(value.size() + 1));
+        if (buffer == nullptr)
+        {
+            return nullptr;
+        }
+        std::memcpy(buffer, value.c_str(), value.size() + 1);
+        return buffer;
+    }
 
     static cpp_type from_c_abi(c_abi_type value) { return value == nullptr ? std::string{} : std::string{value}; }
 };

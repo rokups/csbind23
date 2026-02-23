@@ -247,7 +247,6 @@ private:
         method_decl.allow_override = allow_override;
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
-        method_decl.base_cpp_symbol = std::string(name);
 
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;

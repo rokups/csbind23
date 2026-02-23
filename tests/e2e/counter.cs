@@ -26,7 +26,7 @@ public class BindingE2ETests
     [Fact]
     public void Sum_BindsFreeFunction()
     {
-        Assert.Equal(9, counterApi.sum(4, 5));
+        Assert.Equal(9, e2eApi.sum(4, 5));
     }
 
     [Fact]
@@ -48,14 +48,14 @@ public class BindingE2ETests
     [Fact]
     public void PolymorphicFactory_ReturnsBaseType_WhenBaseRequested()
     {
-        var basePolymorphic = counterApi.make_polymorphic(false);
+        var basePolymorphic = e2eApi.make_polymorphic(false);
         Assert.IsType<Accumulator>(basePolymorphic);
     }
 
     [Fact]
     public void PolymorphicFactory_ReturnsDerivedType_WhenDerivedRequested()
     {
-        var derivedPolymorphic = counterApi.make_polymorphic(true);
+        var derivedPolymorphic = e2eApi.make_polymorphic(true);
         Assert.IsType<FancyAccumulator>(derivedPolymorphic);
     }
 

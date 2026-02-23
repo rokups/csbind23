@@ -112,7 +112,7 @@ void append_free_function_body(TextWriter& output, const FunctionDecl& function_
         return;
     }
 
-    output.append_line_format("    auto result = {}({});", function_decl.cpp_symbol, call_arguments);
+    output.append_line_format("    decltype(auto) result = {}({});", function_decl.cpp_symbol, call_arguments);
     output.append_line_format(
         "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(function_decl.return_type));
 }
@@ -358,7 +358,7 @@ void append_method_body(
         return;
     }
 
-    output.append_line_format("    auto result = instance->{}({});", method_expr, call_arguments);
+    output.append_line_format("    decltype(auto) result = instance->{}({});", method_expr, call_arguments);
     output.append_line_format(
         "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
 }

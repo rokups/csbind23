@@ -129,7 +129,8 @@ std::string parameter_list_without_self(const FunctionDecl& function_decl)
     for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
     {
         const auto& parameter = function_decl.parameters[index];
-        rendered += std::format("{} {}", wrapper_type_name(parameter.type), parameter.name);
+        const bool is_ref = parameter.type.is_reference && !parameter.type.is_const;
+        rendered += std::format("{}{} {}", is_ref ? "ref " : "", wrapper_type_name(parameter.type), parameter.name);
         if (index + 1 < function_decl.parameters.size())
         {
             rendered += ", ";
@@ -562,7 +563,14 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             }
             else
             {
-                managed_args.push_back(parameter.name);
+                if (parameter.type.is_reference && !parameter.type.is_const)
+                {
+                    managed_args.push_back("ref " + parameter.name);
+                }
+                else
+                {
+                    managed_args.push_back(parameter.name);
+                }
             }
         }
 

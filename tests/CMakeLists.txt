@@ -11,6 +11,7 @@ CPMAddPackage(
 
 add_executable(native.tests
     bindings_generator_tests.cpp
+    string_converter_tests.cpp
 )
 
 target_link_libraries(native.tests

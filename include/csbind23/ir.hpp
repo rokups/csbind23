@@ -57,7 +57,6 @@ struct FunctionDecl
     bool allow_override = false;
     std::string class_name;
     std::string virtual_slot_name;
-    std::string base_cpp_symbol;
 };
 
 inline Ownership infer_ownership(const FunctionDecl& function_decl)
