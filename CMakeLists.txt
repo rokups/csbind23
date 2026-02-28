@@ -8,8 +8,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-enable_testing()
-
 set(CSBIND23_BIN_DIR "${CMAKE_BINARY_DIR}/bin")
 set(CSBIND23_LIB_DIR "${CMAKE_BINARY_DIR}/lib")
 
@@ -30,6 +28,5 @@ csbind23_generate_msbuild_props()
 
 add_subdirectory(src)
 add_subdirectory(tests)
-add_subdirectory(example)
 
 csbind23_add_managed_aggregate_targets()

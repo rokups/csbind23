@@ -56,8 +56,20 @@ struct FunctionDecl
     bool is_pure_virtual = false;
     bool is_final = false;
     bool allow_override = false;
+    bool is_property_getter = false;
+    bool is_property_setter = false;
     std::string class_name;
     std::string virtual_slot_name;
+};
+
+struct PropertyDecl
+{
+    std::string name;
+    std::string getter_name;
+    std::string setter_name;
+    TypeRef type;
+    bool has_getter = false;
+    bool has_setter = false;
 };
 
 inline Ownership infer_ownership(const FunctionDecl& function_decl)
@@ -99,11 +111,13 @@ struct ClassDecl
     std::string base_cpp_name;
     bool enable_virtual_overrides = false;
     std::vector<FunctionDecl> methods;
+    std::vector<PropertyDecl> properties;
 };
 
 struct ModuleDecl
 {
     std::string name;
+    std::string csharp_api_class;
     std::string pinvoke_library;
     std::vector<std::string> cabi_includes;
     std::vector<FunctionDecl> functions;

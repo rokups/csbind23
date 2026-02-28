@@ -27,42 +27,37 @@ public:
     std::vector<std::filesystem::path> generate_cabi(const std::filesystem::path& output_root) const;
     std::vector<std::filesystem::path> generate_csharp(const std::filesystem::path& output_root) const;
 
-    template <typename Type> TypeRef make_bound_type_ref() const
+    template <typename Type> TypeRef make_bound_param_type_ref() const
     {
-        TypeRef type_ref = detail::make_type_ref<Type>();
+        TypeRef type_ref = detail::make_param_type_ref<Type>();
         apply_managed_converter<Type>(type_ref);
         return type_ref;
     }
 
+    template <typename Type> TypeRef make_bound_return_type_ref() const
+    {
+        TypeRef type_ref = detail::make_return_type_ref<Type>();
+        apply_managed_converter<Type>(type_ref);
+        return type_ref;
+    }
+
+    template <typename Type> TypeRef make_bound_type_ref() const
+    {
+        return make_bound_param_type_ref<Type>();
+    }
+
 private:
-    template <typename Type, typename = void> struct has_managed_converter_spec : std::false_type
-    {
-    };
-
-    template <typename Type>
-    struct has_managed_converter_spec<Type,
-        std::void_t<decltype(cabi::Converter<Type>::managed_type_name()),
-            decltype(cabi::Converter<Type>::managed_to_pinvoke_expression()),
-            decltype(cabi::Converter<Type>::managed_from_pinvoke_expression()),
-            decltype(cabi::Converter<Type>::managed_finalize_to_pinvoke_statement()),
-            decltype(cabi::Converter<Type>::managed_finalize_from_pinvoke_statement())>> : std::true_type
-    {
-    };
-
     template <typename Type> static void assign_managed_converter(TypeRef& type_ref)
     {
-        if constexpr (has_managed_converter_spec<Type>::value)
-        {
-            type_ref.managed_type_name = std::string(cabi::Converter<Type>::managed_type_name());
-            type_ref.managed_to_pinvoke_expression =
-                std::string(cabi::Converter<Type>::managed_to_pinvoke_expression());
-            type_ref.managed_from_pinvoke_expression =
-                std::string(cabi::Converter<Type>::managed_from_pinvoke_expression());
-            type_ref.managed_finalize_to_pinvoke_statement =
-                std::string(cabi::Converter<Type>::managed_finalize_to_pinvoke_statement());
-            type_ref.managed_finalize_from_pinvoke_statement =
-                std::string(cabi::Converter<Type>::managed_finalize_from_pinvoke_statement());
-        }
+        type_ref.managed_type_name = std::string(cabi::detail::managed_type_name_for<Type>());
+        type_ref.managed_to_pinvoke_expression =
+            std::string(cabi::detail::managed_to_pinvoke_expression_for<Type>());
+        type_ref.managed_from_pinvoke_expression =
+            std::string(cabi::detail::managed_from_pinvoke_expression_for<Type>());
+        type_ref.managed_finalize_to_pinvoke_statement =
+            std::string(cabi::detail::managed_finalize_to_pinvoke_statement_for<Type>());
+        type_ref.managed_finalize_from_pinvoke_statement =
+            std::string(cabi::detail::managed_finalize_from_pinvoke_statement_for<Type>());
     }
 
     template <typename Type> void apply_managed_converter(TypeRef& type_ref) const
@@ -104,6 +99,12 @@ public:
     ModuleBuilder& pinvoke_library(std::string_view library_name)
     {
         module_decl_->pinvoke_library = std::string(library_name);
+        return *this;
+    }
+
+    ModuleBuilder& csharp_api_class(std::string_view class_name)
+    {
+        module_decl_->csharp_api_class = std::string(class_name);
         return *this;
     }
 
@@ -158,13 +159,13 @@ public:
         FunctionDecl function_decl;
         function_decl.name = std::string(name);
         function_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
-        function_decl.return_type = owner_->make_bound_type_ref<ReturnType>();
+        function_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
         function_decl.return_ownership = return_ownership;
 
         function_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((function_decl.parameters.push_back(
-               ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_type_ref<Args>()})),
+             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
             ...);
 
         module_decl_->functions.push_back(std::move(function_decl));
@@ -213,7 +214,7 @@ public:
         FunctionDecl ctor_decl;
         ctor_decl.name = "__ctor";
         ctor_decl.cpp_symbol = class_decl_->cpp_name;
-        ctor_decl.return_type = owner_->make_bound_type_ref<void*>();
+        ctor_decl.return_type = owner_->make_bound_return_type_ref<void*>();
         ctor_decl.return_ownership = ownership;
         ctor_decl.is_constructor = true;
         ctor_decl.class_name = class_decl_->cpp_name;
@@ -221,7 +222,7 @@ public:
         ctor_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((ctor_decl.parameters.push_back(
-               ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_type_ref<Args>()})),
+             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
             ...);
 
         class_decl_->methods.push_back(std::move(ctor_decl));
@@ -277,26 +278,180 @@ public:
         return *this;
     }
 
+    template <auto GetterPtr> ClassBuilder& def_property(std::string_view name)
+    {
+        return def_property(name, GetterPtr, detail::function_symbol_name<GetterPtr>());
+    }
+
+    template <auto GetterPtr, auto SetterPtr> ClassBuilder& def_property(std::string_view name)
+    {
+        return def_property(name, GetterPtr, SetterPtr, detail::function_symbol_name<GetterPtr>(),
+            detail::function_symbol_name<SetterPtr>());
+    }
+
+    template <typename ClassType, typename ReturnType>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
+        std::string_view getter_cpp_symbol)
+    {
+        (void)getter_ptr;
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.has_getter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+
+        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, false,
+            true, false, getter_cpp_symbol);
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
+        std::string_view getter_cpp_symbol)
+    {
+        (void)getter_ptr;
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.has_getter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+
+        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, false,
+            true, false, getter_cpp_symbol);
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)())
+    {
+        (void)getter_ptr;
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.has_getter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+
+        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, false,
+            true, false, std::string(name));
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const)
+    {
+        (void)getter_ptr;
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.has_getter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+
+        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, false,
+            true, false, std::string(name));
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType, typename SetterArg>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
+        void (ClassType::*setter_ptr)(SetterArg))
+    {
+        (void)getter_ptr;
+        (void)setter_ptr;
+
+        return def_property(name, getter_ptr, setter_ptr, std::string(name), std::string(name));
+    }
+
+    template <typename ClassType, typename ReturnType, typename SetterArg>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
+        void (ClassType::*setter_ptr)(SetterArg))
+    {
+        (void)getter_ptr;
+        (void)setter_ptr;
+
+        return def_property(name, getter_ptr, setter_ptr, std::string(name), std::string(name));
+    }
+
+    template <typename ClassType, typename ReturnType, typename SetterArg>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
+        void (ClassType::*setter_ptr)(SetterArg), std::string_view getter_cpp_symbol,
+        std::string_view setter_cpp_symbol)
+    {
+        (void)getter_ptr;
+        (void)setter_ptr;
+
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.has_getter = true;
+        property_decl.has_setter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+        property_decl.setter_name = std::string("__csbind23_propset_") + std::string(name);
+
+        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, false,
+            true, false, getter_cpp_symbol);
+        add_method<ClassType, void, SetterArg>(property_decl.setter_name, false, Ownership::Auto, false,
+            false, true, setter_cpp_symbol);
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType, typename SetterArg>
+    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
+        void (ClassType::*setter_ptr)(SetterArg), std::string_view getter_cpp_symbol,
+        std::string_view setter_cpp_symbol)
+    {
+        (void)getter_ptr;
+        (void)setter_ptr;
+
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.has_getter = true;
+        property_decl.has_setter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+        property_decl.setter_name = std::string("__csbind23_propset_") + std::string(name);
+
+        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, false,
+            true, false, getter_cpp_symbol);
+        add_method<ClassType, void, SetterArg>(property_decl.setter_name, false, Ownership::Auto, false,
+            false, true, setter_cpp_symbol);
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
 private:
     template <typename ClassType, typename ReturnType, typename... Args>
-    void add_method(std::string_view name, bool is_const, Ownership return_ownership, bool allow_override = false)
+    void add_method(std::string_view name, bool is_const, Ownership return_ownership, bool allow_override = false,
+        bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {})
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
-        method_decl.cpp_symbol = std::string(name);
-        method_decl.return_type = owner_->make_bound_type_ref<ReturnType>();
+        method_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
+        method_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
         method_decl.return_ownership = return_ownership;
         method_decl.is_method = true;
         method_decl.is_const = is_const;
         method_decl.is_virtual = allow_override;
         method_decl.allow_override = allow_override;
+        method_decl.is_property_getter = is_property_getter;
+        method_decl.is_property_setter = is_property_setter;
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
 
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((method_decl.parameters.push_back(
-               ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_type_ref<Args>()})),
+             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
             ...);
 
         class_decl_->methods.push_back(std::move(method_decl));

@@ -10,8 +10,8 @@
 
   <PropertyGroup Condition="'$(IsCSharpProject)' == 'true' And '$(CMAKE_BINARY_DIR)' != ''">
     <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
-    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$(CMAKE_BINARY_DIR)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
-    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">$(CMAKE_BINARY_DIR)/bin/$(Configuration)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(CMAKE_BINARY_DIR)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(CMAKE_BINARY_DIR)/bin/$(Configuration)/</BaseOutputPath>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(IsCSharpProject)' == 'true' And '$(CMAKE_BINARY_DIR)' != ''">

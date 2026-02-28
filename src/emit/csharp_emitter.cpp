@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +24,97 @@ std::filesystem::path write_csharp_file(
     return output_path;
 }
 
+bool module_uses_pinvoke_type(const ModuleDecl& module_decl, std::string_view pinvoke_type)
+{
+    auto type_matches = [pinvoke_type](const TypeRef& type_ref) {
+        return type_ref.pinvoke_name == pinvoke_type;
+    };
+
+    for (const auto& function_decl : module_decl.functions)
+    {
+        if (type_matches(function_decl.return_type))
+        {
+            return true;
+        }
+        for (const auto& parameter : function_decl.parameters)
+        {
+            if (type_matches(parameter.type))
+            {
+                return true;
+            }
+        }
+    }
+
+    for (const auto& class_decl : module_decl.classes)
+    {
+        for (const auto& method_decl : class_decl.methods)
+        {
+            if (type_matches(method_decl.return_type))
+            {
+                return true;
+            }
+            for (const auto& parameter : method_decl.parameters)
+            {
+                if (type_matches(parameter.type))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+void emit_shared_pinvoke_types_if_needed(
+    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
+{
+    if (!module_uses_pinvoke_type(module_decl, "CsBind23StringView"))
+    {
+        return;
+    }
+
+    const auto shared_path = output_root / "csbind23.types.g.cs";
+    if (std::filesystem::exists(shared_path))
+    {
+        return;
+    }
+
+    TextWriter shared(256);
+    shared.append_line("namespace CsBind23.Generated;");
+    shared.append_line();
+    shared.append_line("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]");
+    shared.append_line("public readonly struct CsBind23StringView");
+    shared.append_line("{");
+    shared.append_line("    public readonly System.IntPtr str;");
+    shared.append_line("    public readonly nuint length;");
+    shared.append_line();
+    shared.append_line("    public CsBind23StringView(System.IntPtr str, nuint length)");
+    shared.append_line("    {");
+    shared.append_line("        this.str = str;");
+    shared.append_line("        this.length = length;");
+    shared.append_line("    }");
+    shared.append_line("}");
+    shared.append_line();
+    shared.append_line("public static class CsBind23StringViewExtensions");
+    shared.append_line("{");
+    shared.append_line("    public static string ToManaged(CsBind23StringView view)");
+    shared.append_line("    {");
+    shared.append_line("        if (view.str == System.IntPtr.Zero || view.length == 0)");
+    shared.append_line("        {");
+    shared.append_line("            return string.Empty;");
+    shared.append_line("        }");
+    shared.append_line();
+    shared.append_line("        int length = checked((int)view.length);");
+    shared.append_line("        byte[] bytes = new byte[length];");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(view.str, bytes, 0, length);");
+    shared.append_line("        return System.Text.Encoding.UTF8.GetString(bytes);");
+    shared.append_line("    }");
+    shared.append_line("}");
+
+    generated_files.push_back(write_csharp_file(output_root, "csbind23.types.g.cs", shared.str()));
+}
+
 std::string pinvoke_return_type(const FunctionDecl& function_decl)
 {
     if (function_decl.is_constructor)
@@ -39,6 +131,32 @@ std::string wrapper_type_name(const TypeRef& type_ref)
         return type_ref.managed_type_name;
     }
     return type_ref.pinvoke_name;
+}
+
+bool parameter_is_ref(const ParameterDecl& parameter)
+{
+    if (parameter.type.is_reference && !parameter.type.is_const)
+    {
+        return true;
+    }
+
+    if (parameter.type.has_managed_converter() && parameter.type.is_pointer && !parameter.type.is_const
+        && parameter.type.cpp_name == "std::string")
+    {
+        return true;
+    }
+
+    return false;
+}
+
+std::string reflection_parameter_type_expression(const ParameterDecl& parameter)
+{
+    std::string type_expression = std::format("typeof({})", wrapper_type_name(parameter.type));
+    if (parameter_is_ref(parameter))
+    {
+        type_expression += ".MakeByRefType()";
+    }
+    return type_expression;
 }
 
 const ClassDecl* find_class_by_cpp_name(const ModuleDecl& module_decl, std::string_view cpp_name)
@@ -101,12 +219,111 @@ std::string replace_all(std::string value, std::string_view from, std::string_vi
 }
 
 std::string render_inline_template(
-    std::string templ, std::string_view managed_name, std::string_view pinvoke_name, std::string_view value_name)
+    std::string templ, std::string_view managed_name, std::string_view pinvoke_name, std::string_view value_name,
+    std::string_view module_name)
 {
     templ = replace_all(std::move(templ), "{managed}", managed_name);
     templ = replace_all(std::move(templ), "{pinvoke}", pinvoke_name);
     templ = replace_all(std::move(templ), "{value}", value_name);
+    templ = replace_all(std::move(templ), "{module}", module_name);
     return templ;
+}
+
+std::vector<std::string> split_trimmed_lines(std::string_view text)
+{
+    std::vector<std::string> lines;
+    std::size_t start = 0;
+    while (start <= text.size())
+    {
+        std::size_t end = text.find('\n', start);
+        if (end == std::string_view::npos)
+        {
+            end = text.size();
+        }
+
+        std::string_view line = text.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.remove_suffix(1);
+        }
+
+        const std::size_t first_non_ws = line.find_first_not_of(" \t");
+        if (first_non_ws != std::string_view::npos)
+        {
+            lines.emplace_back(line.substr(first_non_ws));
+        }
+
+        if (end == text.size())
+        {
+            break;
+        }
+        start = end + 1;
+    }
+
+    return lines;
+}
+
+void append_embedded_statement(TextWriter& output, std::string_view indent, std::string_view statement)
+{
+    const auto lines = split_trimmed_lines(statement);
+    for (const auto& line : lines)
+    {
+        if (!line.empty() && line.back() == ';')
+        {
+            output.append_line_format("{}{}", indent, line);
+        }
+        else
+        {
+            output.append_line_format("{}{};", indent, line);
+        }
+    }
+}
+
+void append_embedded_assignment(
+    TextWriter& output, std::string_view indent, std::string_view assignment_prefix, std::string_view expression)
+{
+    const auto lines = split_trimmed_lines(expression);
+    if (lines.empty())
+    {
+        output.append_line_format("{}{};", indent, assignment_prefix);
+        return;
+    }
+
+    if (lines.size() == 1)
+    {
+        output.append_line_format("{}{}{};", indent, assignment_prefix, lines[0]);
+        return;
+    }
+
+    output.append_line_format("{}{}{}", indent, assignment_prefix, lines[0]);
+    for (std::size_t index = 1; index + 1 < lines.size(); ++index)
+    {
+        output.append_line_format("{}{}", indent, lines[index]);
+    }
+    output.append_line_format("{}{};", indent, lines.back());
+}
+
+void append_embedded_return(TextWriter& output, std::string_view indent, std::string_view expression)
+{
+    const auto lines = split_trimmed_lines(expression);
+    if (lines.empty())
+    {
+        output.append_line_format("{}return;", indent);
+        return;
+    }
+
+    if (lines.size() == 1)
+    {
+        output.append_line_format("{}return {};", indent, lines[0]);
+        return;
+    }
+
+    output.append_line_format("{}return {}", indent, lines[0]);
+    for (std::size_t index = 1; index + 1 < lines.size(); ++index)
+    {
+        output.append_line_format("{}{}", indent, lines[index]);
+    }
+    output.append_line_format("{}{};", indent, lines.back());
 }
 
 std::string join_arguments(const std::vector<std::string>& arguments)
@@ -123,13 +340,22 @@ std::string join_arguments(const std::vector<std::string>& arguments)
     return rendered;
 }
 
+std::string csharp_api_class_name(const ModuleDecl& module_decl)
+{
+    if (!module_decl.csharp_api_class.empty())
+    {
+        return module_decl.csharp_api_class;
+    }
+    return module_decl.name + "Api";
+}
+
 std::string parameter_list_without_self(const FunctionDecl& function_decl)
 {
     std::string rendered;
     for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
     {
         const auto& parameter = function_decl.parameters[index];
-        const bool is_ref = parameter.type.is_reference && !parameter.type.is_const;
+        const bool is_ref = parameter_is_ref(parameter);
         rendered += std::format("{}{} {}", is_ref ? "ref " : "", wrapper_type_name(parameter.type), parameter.name);
         if (index + 1 < function_decl.parameters.size())
         {
@@ -169,6 +395,35 @@ std::string callback_method_name(const FunctionDecl& method_decl, std::size_t in
     return std::format("__csbind23_CallbackMethod{}_{}", index, method_decl.virtual_slot_name);
 }
 
+std::size_t virtual_mask_chunk(std::size_t virtual_index)
+{
+    return virtual_index / 64;
+}
+
+std::size_t virtual_mask_bit(std::size_t virtual_index)
+{
+    return virtual_index % 64;
+}
+
+std::string virtual_mask_field_name(std::size_t chunk_index)
+{
+    return std::format("__csbind23_derivedOverrideMask{}", chunk_index);
+}
+
+std::string virtual_mask_bit_literal(std::size_t virtual_index)
+{
+    return std::format("(1UL << {})", virtual_mask_bit(virtual_index));
+}
+
+std::string virtual_mask_test_expression(std::string_view instance_prefix, std::size_t virtual_index)
+{
+    return std::format(
+        "(({}{} & {}) != 0)",
+        instance_prefix,
+        virtual_mask_field_name(virtual_mask_chunk(virtual_index)),
+        virtual_mask_bit_literal(virtual_index));
+}
+
 void append_native_signature(TextWriter& output, const FunctionDecl& function_decl, std::string_view pinvoke_library,
     const std::string& exported_name, bool include_self)
 {
@@ -202,16 +457,14 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
 void append_native_connect_signature(TextWriter& output, std::string_view pinvoke_library,
     const std::string& exported_name, const std::vector<const FunctionDecl*>& virtual_methods)
 {
+    (void)virtual_methods;
     output.append_line_format(
         "    [System.Runtime.InteropServices.DllImport(\"{}\", CallingConvention = "
         "System.Runtime.InteropServices.CallingConvention.Cdecl)]",
         pinvoke_library);
-    output.append_format("    internal static extern void {}(System.IntPtr self", exported_name);
-    for (std::size_t index = 0; index < virtual_methods.size(); ++index)
-    {
-        output.append_format(", System.IntPtr callback{}", index);
-    }
-    output.append_line(");");
+    output.append_line_format(
+        "    internal static extern void {}(System.IntPtr self, System.IntPtr callbacks, nuint callbackCount);",
+        exported_name);
     output.append_line();
 }
 
@@ -235,7 +488,11 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     const std::string base_native_name = native_name + "__base";
     const std::string return_type = wrapper_return_type(module_decl, method_decl);
 
-    if (is_override)
+    if (method_decl.is_property_getter || method_decl.is_property_setter)
+    {
+        output.append_format("    private {} {}(", return_type, method_decl.name);
+    }
+    else if (is_override)
     {
         output.append_format("    public override {} {}(", return_type, method_decl.name);
     }
@@ -260,18 +517,18 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
         if (!parameter.type.managed_to_pinvoke_expression.empty())
         {
             const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
-            output.append_line_format(
-                "        {} {} = {};",
-                parameter.type.pinvoke_name,
-                pinvoke_name,
-                render_inline_template(
-                    parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name));
+            const std::string converted = render_inline_template(
+                parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name,
+                module_name);
+            append_embedded_assignment(
+                output, "        ", std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name), converted);
             call_arguments.push_back(pinvoke_name);
 
             if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
             {
                 finalize_statements.push_back(render_inline_template(
-                    parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
+                    parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
+                    module_name));
             }
             continue;
         }
@@ -288,7 +545,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
         : std::format("{}Native.{}(_handle, {})", module_name, base_native_name, call_arguments_rendered);
 
     const std::string dispatch_native_call = is_virtual
-        ? std::format("(__csbind23_dispatchDepth{} > 0 ? {} : {})", virtual_index, base_native_call, native_call)
+        ? std::format("({} ? {} : {})", virtual_mask_test_expression("", virtual_index), base_native_call, native_call)
         : native_call;
 
     const bool has_return_converter = !method_decl.return_type.managed_from_pinvoke_expression.empty();
@@ -312,7 +569,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             output.append_line("        {");
             for (const auto& finalize_statement : finalize_statements)
             {
-                output.append_line_format("            {};", finalize_statement);
+                append_embedded_statement(output, "            ", finalize_statement);
             }
             output.append_line("        }");
         }
@@ -343,7 +600,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             output.append_line("        {");
             for (const auto& finalize_statement : finalize_statements)
             {
-                output.append_line_format("            {};", finalize_statement);
+                append_embedded_statement(output, "            ", finalize_statement);
             }
             output.append_line("        }");
         }
@@ -364,7 +621,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             output.append_line("        {");
             for (const auto& finalize_statement : finalize_statements)
             {
-                output.append_line_format("            {};", finalize_statement);
+                append_embedded_statement(output, "            ", finalize_statement);
             }
             output.append_line("        }");
         }
@@ -375,13 +632,14 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
         const std::string managed_result_name = "__csbind23_result_managed";
         const std::string converted_expression =
             render_inline_template(method_decl.return_type.managed_from_pinvoke_expression, managed_result_name, native_result_name,
-                native_result_name);
+                native_result_name, module_name);
 
         if (!needs_finally)
         {
             output.append_line_format("        {} {} = {};", method_decl.return_type.pinvoke_name, native_result_name,
                 dispatch_native_call);
-            output.append_line_format("        {} {} = {};", return_type, managed_result_name, converted_expression);
+            append_embedded_assignment(
+                output, "        ", std::format("{} {} = ", return_type, managed_result_name), converted_expression);
             output.append_line_format("        return {};", managed_result_name);
         }
         else
@@ -391,22 +649,21 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             output.append_line("        try");
             output.append_line("        {");
             output.append_line_format("            {} = {};", native_result_name, dispatch_native_call);
-            output.append_line_format("            {} = {};", managed_result_name, converted_expression);
+            append_embedded_assignment(
+                output, "            ", std::format("{} = ", managed_result_name), converted_expression);
             output.append_line_format("            return {};", managed_result_name);
             output.append_line("        }");
             output.append_line("        finally");
             output.append_line("        {");
             for (const auto& finalize_statement : finalize_statements)
             {
-                output.append_line_format("            {};", finalize_statement);
+                append_embedded_statement(output, "            ", finalize_statement);
             }
             if (has_return_finalize)
             {
-                output.append_line_format(
-                    "            {};",
-                    render_inline_template(
-                                method_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name, native_result_name,
-                        native_result_name));
+                append_embedded_statement(output, "            ", render_inline_template(
+                    method_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name,
+                    native_result_name, native_result_name, module_name));
             }
             output.append_line("        }");
         }
@@ -419,18 +676,92 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
 void append_virtual_director_support(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
     const std::vector<const FunctionDecl*>& virtual_methods)
 {
-    for (std::size_t index = 0; index < virtual_methods.size(); ++index)
-    {
-        output.append_line("    [System.ThreadStatic]");
-        output.append_line_format("    private static int __csbind23_dispatchDepth{};", index);
-    }
-    output.append_line();
-
     output.append_line("    private static readonly object __csbind23_registryLock = new object();");
     output.append_line_format(
         "    private static readonly System.Collections.Generic.Dictionary<System.IntPtr, "
         "System.WeakReference<{}>> __csbind23_registry = new();",
         class_decl.name);
+    output.append_line();
+
+    const std::size_t mask_field_count = (virtual_methods.size() + 63) / 64;
+    for (std::size_t chunk = 0; chunk < mask_field_count; ++chunk)
+    {
+        output.append_line_format("    private ulong {};", virtual_mask_field_name(chunk));
+    }
+    for (std::size_t index = 0; index < virtual_methods.size(); ++index)
+    {
+        const auto& method_decl = *virtual_methods[index];
+        if (method_decl.parameters.empty())
+        {
+            output.append_line_format("    private static readonly System.Type[] __csbind23_methodTypes{} = System.Type.EmptyTypes;", index);
+        }
+        else
+        {
+            std::string type_list;
+            for (std::size_t p = 0; p < method_decl.parameters.size(); ++p)
+            {
+                const auto& parameter = method_decl.parameters[p];
+                if (!type_list.empty())
+                {
+                    type_list += ", ";
+                }
+                type_list += reflection_parameter_type_expression(parameter);
+            }
+            output.append_line_format(
+                "    private static readonly System.Type[] __csbind23_methodTypes{} = new System.Type[] {{ {} }};",
+                index,
+                type_list);
+        }
+    }
+    output.append_line();
+
+    output.append_line("    private static ulong __csbind23_SwigDerivedClassHasMethod(");
+    output.append_line("        object instance,");
+    output.append_line("        string methodName,");
+    output.append_line("        System.Type classType,");
+    output.append_line("        System.Type[] methodTypes,");
+    output.append_line("        ulong derivedFlag)");
+    output.append_line("    {");
+    output.append_line("        var methodInfo = instance.GetType().GetMethod(");
+    output.append_line("            methodName,");
+    output.append_line("            System.Reflection.BindingFlags.Public |");
+    output.append_line("            System.Reflection.BindingFlags.NonPublic |");
+    output.append_line("            System.Reflection.BindingFlags.Instance,");
+    output.append_line("            null,");
+    output.append_line("            methodTypes,");
+    output.append_line("            null);");
+    output.append_line("        if (methodInfo == null)");
+    output.append_line("        {");
+    output.append_line("            return 0UL;");
+    output.append_line("        }");
+    output.append_line();
+    output.append_line("        bool hasDerivedMethod = methodInfo.IsVirtual");
+    output.append_line("            && !methodInfo.IsAbstract");
+    output.append_line("            && (methodInfo.DeclaringType!.IsSubclassOf(classType) || methodInfo.DeclaringType == classType)");
+    output.append_line("            && methodInfo.DeclaringType != methodInfo.GetBaseDefinition().DeclaringType;");
+    output.append_line("        return hasDerivedMethod ? derivedFlag : 0UL;");
+    output.append_line("    }");
+    output.append_line();
+
+    output.append_line("    private void __csbind23_InitializeDerivedOverrideFlags()");
+    output.append_line("    {");
+    for (std::size_t chunk = 0; chunk < mask_field_count; ++chunk)
+    {
+        output.append_line_format("        {} = 0UL;", virtual_mask_field_name(chunk));
+    }
+    for (std::size_t index = 0; index < virtual_methods.size(); ++index)
+    {
+        const auto& method_decl = *virtual_methods[index];
+        const std::size_t chunk = virtual_mask_chunk(index);
+        output.append_line_format(
+            "        {} |= __csbind23_SwigDerivedClassHasMethod(this, \"{}\", typeof({}), __csbind23_methodTypes{}, {});",
+            virtual_mask_field_name(chunk),
+            method_decl.name,
+            class_decl.name,
+            index,
+            virtual_mask_bit_literal(index));
+    }
+    output.append_line("    }");
     output.append_line();
 
     output.append_line_format(
@@ -491,7 +822,14 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         }
         output.append_line(");");
         output.append_line_format(
-            "    private {} __csbind23_callbackDelegate{};", callback_delegate_name(method_decl, index), index);
+            "    private static readonly {} __csbind23_staticCallbackDelegate{} = {};",
+            callback_delegate_name(method_decl, index),
+            index,
+            callback_method_name(method_decl, index));
+        output.append_line_format(
+            "    private static readonly System.IntPtr __csbind23_staticCallbackPtr{} = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(__csbind23_staticCallbackDelegate{});",
+            index,
+            index);
         output.append_line();
     }
 
@@ -502,22 +840,26 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
     output.append_line("            return;");
     output.append_line("        }");
 
+    output.append_line_format("        System.Span<System.IntPtr> __csbind23_callbacks = stackalloc System.IntPtr[{}];", virtual_methods.size());
     for (std::size_t index = 0; index < virtual_methods.size(); ++index)
     {
-        const auto& method_decl = *virtual_methods[index];
-        output.append_line_format(
-            "        __csbind23_callbackDelegate{} = new {}({});",
-            index,
-            callback_delegate_name(method_decl, index),
-            callback_method_name(method_decl, index));
+        output.append_line_format("        if ({})", virtual_mask_test_expression("", index));
+        output.append_line("        {");
+        output.append_line_format("            __csbind23_callbacks[{}] = __csbind23_staticCallbackPtr{};", index, index);
+        output.append_line("        }");
     }
-
-    output.append_format("        {}Native.{}_{}_connect_director(_handle", module_name, module_name, class_decl.name);
-    for (std::size_t index = 0; index < virtual_methods.size(); ++index)
-    {
-        output.append_format(", System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(__csbind23_callbackDelegate{})", index);
-    }
-    output.append_line(");");
+    output.append_line("        unsafe");
+    output.append_line("        {");
+    output.append_line("            fixed (System.IntPtr* __csbind23_callbacksPtr = __csbind23_callbacks)");
+    output.append_line("            {");
+    output.append_line_format(
+        "                {}Native.{}_{}_connect_director(_handle, (System.IntPtr)__csbind23_callbacksPtr, (nuint){});",
+        module_name,
+        module_name,
+        class_decl.name,
+        virtual_methods.size());
+    output.append_line("            }");
+    output.append_line("        }");
     output.append_line("    }");
     output.append_line();
 
@@ -545,6 +887,34 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         }
         output.append_line("        }");
 
+        std::vector<std::string> base_call_arguments;
+        base_call_arguments.reserve(method_decl.parameters.size() + 1);
+        base_call_arguments.push_back("self");
+        for (const auto& parameter : method_decl.parameters)
+        {
+            base_call_arguments.push_back(parameter.name);
+        }
+        const std::string base_call_arguments_rendered = join_arguments(base_call_arguments);
+        const std::string base_native_call = std::format(
+            "{}Native.{}_{}__base({})",
+            module_name,
+            module_name,
+            class_decl.name + "_" + method_decl.name,
+            base_call_arguments_rendered);
+
+        output.append_line_format("        if (!{})", virtual_mask_test_expression("instance.", index));
+        output.append_line("        {");
+        if (method_decl.return_type.c_abi_name == "void")
+        {
+            output.append_line_format("            {} ;", base_native_call);
+            output.append_line("            return;");
+        }
+        else
+        {
+            output.append_line_format("            return {};", base_native_call);
+        }
+        output.append_line("        }");
+
         std::vector<std::string> managed_args;
         managed_args.reserve(method_decl.parameters.size());
         for (std::size_t p = 0; p < method_decl.parameters.size(); ++p)
@@ -553,12 +923,13 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             if (!parameter.type.managed_from_pinvoke_expression.empty())
             {
                 const std::string managed_name = std::format("__csbind23_arg{}_managed", p);
-                output.append_line_format(
-                    "        {} {} = {};",
-                    wrapper_type_name(parameter.type),
-                    managed_name,
+                append_embedded_assignment(
+                    output,
+                    "        ",
+                    std::format("{} {} = ", wrapper_type_name(parameter.type), managed_name),
                     render_inline_template(
-                        parameter.type.managed_from_pinvoke_expression, managed_name, parameter.name, parameter.name));
+                        parameter.type.managed_from_pinvoke_expression, managed_name, parameter.name, parameter.name,
+                        module_name));
                 managed_args.push_back(managed_name);
             }
             else
@@ -576,44 +947,29 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
         const std::string invoke_args = join_arguments(managed_args);
 
-        output.append_line("        try");
-        output.append_line("        {");
-        output.append_line_format("            __csbind23_dispatchDepth{}++;", index);
-
         if (method_decl.return_type.c_abi_name == "void")
         {
-            output.append_line_format("            instance.{}({});", method_decl.name, invoke_args);
+            output.append_line_format("        instance.{}({});", method_decl.name, invoke_args);
+            output.append_line("        return;");
         }
         else
         {
             output.append_line_format(
-                "            {} __csbind23_result = instance.{}({});",
+                "        {} __csbind23_result = instance.{}({});",
                 wrapper_return_type(module_decl, method_decl),
                 method_decl.name,
                 invoke_args);
 
             if (!method_decl.return_type.managed_to_pinvoke_expression.empty())
             {
-                output.append_line_format(
-                    "            return {};",
-                    render_inline_template(method_decl.return_type.managed_to_pinvoke_expression, "__csbind23_result",
-                        "__csbind23_result", "__csbind23_result"));
+                append_embedded_return(output, "        ", render_inline_template(
+                    method_decl.return_type.managed_to_pinvoke_expression, "__csbind23_result", "__csbind23_result",
+                    "__csbind23_result", module_name));
             }
             else
             {
-                output.append_line("            return __csbind23_result;");
+                output.append_line("        return __csbind23_result;");
             }
-        }
-
-        output.append_line("        }");
-        output.append_line("        finally");
-        output.append_line("        {");
-        output.append_line_format("            __csbind23_dispatchDepth{}--;", index);
-        output.append_line("        }");
-
-        if (method_decl.return_type.c_abi_name != "void")
-        {
-            output.append_line("        return default!;");
         }
 
         output.append_line("    }");
@@ -656,6 +1012,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line("        _ownsHandle = ownsHandle;");
         if (has_virtual_support)
         {
+            output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
             output.append_line("        __csbind23_RegisterInstance(_handle, this);");
             output.append_line("        __csbind23_ConnectDirector();");
         }
@@ -693,17 +1050,19 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
-                output.append_line_format(
-                    "        {} {} = {};",
-                    parameter.type.pinvoke_name,
-                    pinvoke_name,
+                append_embedded_assignment(
+                    output,
+                    "        ",
+                    std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
                     render_inline_template(
-                        parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name));
+                        parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name,
+                        module_name));
                 converted_arguments.push_back(pinvoke_name);
                 if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
-                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
+                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
+                        module_name));
                 }
                 continue;
             }
@@ -730,7 +1089,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             output.append_line("        {");
             for (const auto& finalize_statement : finalize_statements)
             {
-                output.append_line_format("            {};", finalize_statement);
+                append_embedded_statement(output, "            ", finalize_statement);
             }
             output.append_line("        }");
         }
@@ -738,6 +1097,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line_format("        _ownsHandle = {};", owns_handle ? "true" : "false");
         if (has_virtual_support)
         {
+            output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
             output.append_line("        __csbind23_RegisterInstance(_handle, this);");
             output.append_line("        __csbind23_ConnectDirector();");
         }
@@ -853,6 +1213,36 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             virtual_index);
     }
 
+    for (const auto& property_decl : class_decl.properties)
+    {
+        const FunctionDecl* getter_decl = nullptr;
+        for (const auto& method_decl : class_decl.methods)
+        {
+            if (method_decl.name == property_decl.getter_name)
+            {
+                getter_decl = &method_decl;
+                break;
+            }
+        }
+
+        std::string property_type = getter_decl != nullptr
+            ? wrapper_return_type(module_decl, *getter_decl)
+            : wrapper_type_name(property_decl.type);
+
+        output.append_line_format("    public {} {}", property_type, property_decl.name);
+        output.append_line("    {");
+        if (property_decl.has_getter)
+        {
+            output.append_line_format("        get => {}();", property_decl.getter_name);
+        }
+        if (property_decl.has_setter)
+        {
+            output.append_line_format("        set => {}(value);", property_decl.setter_name);
+        }
+        output.append_line("    }");
+        output.append_line();
+    }
+
     output.append_line("}");
     output.append_line();
 }
@@ -865,6 +1255,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::filesystem::create_directories(output_root);
 
     std::vector<std::filesystem::path> generated_files;
+    emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
 
     TextWriter generated(3072);
 
@@ -884,16 +1275,16 @@ std::vector<std::filesystem::path> emit_csharp_module(
         const auto virtual_methods = collect_virtual_methods(class_decl);
 
         FunctionDecl type_name_decl;
-        type_name_decl.return_type.c_abi_name = "const char*";
-        type_name_decl.return_type.pinvoke_name = "System.IntPtr";
+        type_name_decl.return_type.c_abi_name = "int";
+        type_name_decl.return_type.pinvoke_name = "int";
         append_native_signature(generated, type_name_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + class_decl.name + "_static_type_name", false);
+            module_decl.name + "_" + class_decl.name + "_static_type_id", false);
 
         FunctionDecl dynamic_type_name_decl;
-        dynamic_type_name_decl.return_type.c_abi_name = "const char*";
-        dynamic_type_name_decl.return_type.pinvoke_name = "System.IntPtr";
+        dynamic_type_name_decl.return_type.c_abi_name = "int";
+        dynamic_type_name_decl.return_type.pinvoke_name = "int";
         append_native_signature(generated, dynamic_type_name_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + class_decl.name + "_dynamic_type_name", true);
+            module_decl.name + "_" + class_decl.name + "_dynamic_type_id", true);
 
         if (class_has_owned_ctor(class_decl))
         {
@@ -943,31 +1334,14 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     generated.append_line_format("internal static class {}Runtime", module_decl.name);
     generated.append_line("{");
-    generated.append_line("    private static readonly System.Collections.Generic.Dictionary<string, System.Func<System.IntPtr, bool, object>> __csbind23_typeRegistry =");
-    generated.append_line("        new System.Collections.Generic.Dictionary<string, System.Func<System.IntPtr, bool, object>>()");
+    generated.append_line("    private static readonly System.Func<System.IntPtr, bool, object>[] __csbind23_typeFactories =");
+    generated.append_line("        new System.Func<System.IntPtr, bool, object>[]");
     generated.append_line("        {");
     for (const auto& class_decl : module_decl.classes)
     {
-        generated.append_line_format(
-            "            [{}_NativeTypeName_{}()] = (handle, ownsHandle) => new {}(handle, ownsHandle),",
-            module_decl.name,
-            class_decl.name,
-            class_decl.name);
+        generated.append_line_format("            (handle, ownsHandle) => new {}(handle, ownsHandle),", class_decl.name);
     }
     generated.append_line("        };");
-    generated.append_line();
-
-    for (const auto& class_decl : module_decl.classes)
-    {
-        generated.append_line_format(
-            "    private static string {}_NativeTypeName_{}() => "
-            "System.Runtime.InteropServices.Marshal.PtrToStringAnsi({}Native.{}_{}_static_type_name()) ?? string.Empty;",
-            module_decl.name,
-            class_decl.name,
-            module_decl.name,
-            module_decl.name,
-            class_decl.name);
-    }
     generated.append_line();
 
     for (const auto& class_decl : module_decl.classes)
@@ -981,13 +1355,13 @@ std::vector<std::filesystem::path> emit_csharp_module(
         generated.append_line("        }");
         generated.append_line();
         generated.append_line_format(
-            "        var dynamicType = System.Runtime.InteropServices.Marshal.PtrToStringAnsi({}Native.{}_{}_dynamic_type_name(handle));",
+            "        int dynamicTypeId = {}Native.{}_{}_dynamic_type_id(handle);",
             module_decl.name,
             module_decl.name,
             class_decl.name);
-        generated.append_line("        if (!string.IsNullOrEmpty(dynamicType) && __csbind23_typeRegistry.TryGetValue(dynamicType, out var factory))");
+        generated.append_line("        if (dynamicTypeId >= 0 && dynamicTypeId < __csbind23_typeFactories.Length)");
         generated.append_line("        {");
-        generated.append_line("            return factory(handle, ownsHandle);");
+        generated.append_line("            return __csbind23_typeFactories[dynamicTypeId](handle, ownsHandle);");
         generated.append_line("        }");
         generated.append_line();
         generated.append_line_format("        return new {}(handle, ownsHandle);", class_decl.name);
@@ -998,7 +1372,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     generated.append_line("}");
     generated.append_line();
 
-    generated.append_line_format("public static class {}Api", module_decl.name);
+    generated.append_line_format("public static class {}", csharp_api_class_name(module_decl));
     generated.append_line("{");
     for (const auto& function_decl : module_decl.functions)
     {
@@ -1020,17 +1394,18 @@ std::vector<std::filesystem::path> emit_csharp_module(
             if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
-                generated.append_line_format(
-                    "        {} {} = {};",
-                    parameter.type.pinvoke_name,
-                    pinvoke_name,
+                append_embedded_assignment(
+                    generated,
+                    "        ",
+                    std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
                     render_inline_template(parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name,
-                        parameter.name));
+                        parameter.name, module_decl.name));
                 call_arguments.push_back(pinvoke_name);
                 if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
-                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name));
+                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
+                        module_decl.name));
                 }
                 continue;
             }
@@ -1061,7 +1436,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 generated.append_line("        {");
                 for (const auto& finalize_statement : finalize_statements)
                 {
-                    generated.append_line_format("            {};", finalize_statement);
+                    append_embedded_statement(generated, "            ", finalize_statement);
                 }
                 generated.append_line("        }");
             }
@@ -1093,7 +1468,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     generated.append_line("        {");
                     for (const auto& finalize_statement : finalize_statements)
                     {
-                        generated.append_line_format("            {};", finalize_statement);
+                        append_embedded_statement(generated, "            ", finalize_statement);
                     }
                     generated.append_line("        }");
                 }
@@ -1114,7 +1489,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     generated.append_line("        {");
                     for (const auto& finalize_statement : finalize_statements)
                     {
-                        generated.append_line_format("            {};", finalize_statement);
+                        append_embedded_statement(generated, "            ", finalize_statement);
                     }
                     generated.append_line("        }");
                 }
@@ -1125,14 +1500,17 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 const std::string managed_result_name = "__csbind23_result_managed";
                 const std::string converted_expression =
                     render_inline_template(function_decl.return_type.managed_from_pinvoke_expression, managed_result_name, native_result_name,
-                        native_result_name);
+                        native_result_name, module_decl.name);
 
                 if (!needs_finally)
                 {
                     generated.append_line_format(
                         "        {} {} = {};", function_decl.return_type.pinvoke_name, native_result_name, native_call);
-                    generated.append_line_format(
-                        "        {} {} = {};", return_type, managed_result_name, converted_expression);
+                    append_embedded_assignment(
+                        generated,
+                        "        ",
+                        std::format("{} {} = ", return_type, managed_result_name),
+                        converted_expression);
                     generated.append_line_format("        return {};", managed_result_name);
                 }
                 else
@@ -1143,22 +1521,24 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     generated.append_line("        try");
                     generated.append_line("        {");
                     generated.append_line_format("            {} = {};", native_result_name, native_call);
-                    generated.append_line_format("            {} = {};", managed_result_name, converted_expression);
+                    append_embedded_assignment(
+                        generated,
+                        "            ",
+                        std::format("{} = ", managed_result_name),
+                        converted_expression);
                     generated.append_line_format("            return {};", managed_result_name);
                     generated.append_line("        }");
                     generated.append_line("        finally");
                     generated.append_line("        {");
                     for (const auto& finalize_statement : finalize_statements)
                     {
-                        generated.append_line_format("            {};", finalize_statement);
+                        append_embedded_statement(generated, "            ", finalize_statement);
                     }
                     if (has_return_finalize)
                     {
-                        generated.append_line_format(
-                            "            {};",
-                            render_inline_template(
-                                function_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name, native_result_name,
-                                native_result_name));
+                        append_embedded_statement(generated, "            ", render_inline_template(
+                            function_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name,
+                            native_result_name, native_result_name, module_decl.name));
                     }
                     generated.append_line("        }");
                 }

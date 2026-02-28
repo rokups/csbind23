@@ -88,11 +88,24 @@ function(csbind23_add_managed_aggregate_targets)
         execute_process(
             COMMAND ${DOTNET_EXECUTABLE} sln ${managed_solution} add ${project_path}
             RESULT_VARIABLE add_result
-            OUTPUT_QUIET
-            ERROR_QUIET
+            OUTPUT_VARIABLE add_output
+            ERROR_VARIABLE add_error
         )
         if (NOT add_result EQUAL 0)
-            message(FATAL_ERROR "Failed adding managed project to solution: ${project_path}")
+            execute_process(
+                COMMAND ${DOTNET_EXECUTABLE} sln ${managed_solution} add ${project_path}
+                RESULT_VARIABLE add_retry_result
+                OUTPUT_VARIABLE add_retry_output
+                ERROR_VARIABLE add_retry_error
+            )
+            if (NOT add_retry_result EQUAL 0)
+                message(WARNING
+                    "Skipping managed project registration after repeated failure: ${project_path}\n"
+                    "First attempt output: ${add_output}\n"
+                    "First attempt error: ${add_error}\n"
+                    "Retry output: ${add_retry_output}\n"
+                    "Retry error: ${add_retry_error}")
+            endif()
         endif()
     endforeach()
 
@@ -105,15 +118,14 @@ function(csbind23_add_managed_aggregate_targets)
     )
 
     add_custom_target(solution.restore
-        COMMAND ${DOTNET_EXECUTABLE} restore ${managed_solution} -p:CMAKE_BINARY_DIR=${CMAKE_BINARY_DIR}
-        DEPENDS ${managed_solution}
+        DEPENDS ${restore_stamp}
         COMMENT "Restoring managed solution"
         VERBATIM
     )
 
-    add_custom_target(solution.build
+    add_custom_target(solution.build ALL
         COMMAND ${DOTNET_EXECUTABLE} build ${managed_solution} --configuration $<CONFIG> --no-restore -p:CMAKE_BINARY_DIR=${CMAKE_BINARY_DIR}
-        DEPENDS ${restore_stamp} ${solution_build_dependencies}
+        DEPENDS solution.restore ${solution_build_dependencies}
         COMMENT "Building managed solution"
         VERBATIM
     )

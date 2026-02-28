@@ -366,13 +366,10 @@ void append_method_body(
 void append_connect_signature(TextWriter& output, const std::string& module_name, const ClassDecl& class_decl,
     const std::vector<const FunctionDecl*>& virtual_methods, const std::string& exported_name)
 {
-    output.append_format("extern \"C\" void {}(void* self", exported_name);
-    for (const auto* method_decl : virtual_methods)
-    {
-        output.append_format(", {} {}", callback_typedef_name(module_name, class_decl.name, *method_decl),
-            method_decl->virtual_slot_name);
-    }
-    output.append(")");
+    (void)module_name;
+    (void)class_decl;
+    (void)virtual_methods;
+    output.append_format("extern \"C\" void {}(void* self, const void* const* callbacks, std::size_t callback_count)", exported_name);
 }
 
 void append_connect_body(TextWriter& output, const std::string& module_name, const ClassDecl& class_decl,
@@ -388,12 +385,20 @@ void append_connect_body(TextWriter& output, const std::string& module_name, con
     output.append_line("        return;");
     output.append_line("    }");
     output.append_line();
-    output.append_line_format("    {}_{}_CallbackTable callbacks{{}};", module_name, class_decl.name);
-    for (const auto* method_decl : virtual_methods)
+    output.append_line_format("    {}_{}_CallbackTable callback_table{{}};", module_name, class_decl.name);
+    for (std::size_t index = 0; index < virtual_methods.size(); ++index)
     {
-        output.append_line_format("    callbacks.{} = {};", method_decl->virtual_slot_name, method_decl->virtual_slot_name);
+        const auto* method_decl = virtual_methods[index];
+        output.append_line_format("    if (callbacks != nullptr && callback_count > {})", index);
+        output.append_line("    {");
+        output.append_line_format(
+            "        callback_table.{} = reinterpret_cast<{}>(callbacks[{}]);",
+            method_decl->virtual_slot_name,
+            callback_typedef_name(module_name, class_decl.name, *method_decl),
+            index);
+        output.append_line("    }");
     }
-    output.append_line("    director->set_callbacks(callbacks);");
+    output.append_line("    director->set_callbacks(callback_table);");
 }
 
 void append_disconnect_body(TextWriter& output, const std::string& module_name, const ClassDecl& class_decl)
@@ -421,6 +426,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
     TextWriter generated(4096);
 
     generated.append_line("#include <csbind23/cabi/converter.hpp>");
+    generated.append_line("#include <cstddef>");
     generated.append_line("#include <typeinfo>");
     for (const auto& include_directive : module_decl.cabi_includes)
     {
@@ -444,14 +450,24 @@ std::vector<std::filesystem::path> emit_cabi_module(
         const auto virtual_methods = collect_virtual_methods(class_decl);
         const bool has_virtual_director = !virtual_methods.empty();
 
+        std::size_t class_type_id = 0;
+        for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
+        {
+            if (module_decl.classes[i].cpp_name == class_decl.cpp_name)
+            {
+                class_type_id = i;
+                break;
+            }
+        }
+
         generated.append_line_format(
-            "extern \"C\" const char* {}_{}_static_type_name() {{", module_decl.name, class_decl.name);
-        generated.append_line_format("    return typeid({}).name();", class_decl.cpp_name);
+            "extern \"C\" int {}_{}_static_type_id() {{", module_decl.name, class_decl.name);
+        generated.append_line_format("    return {};", class_type_id);
         generated.append_line("}");
         generated.append_line();
 
         generated.append_line_format(
-            "extern \"C\" const char* {}_{}_dynamic_type_name(const void* self) {{",
+            "extern \"C\" int {}_{}_dynamic_type_id(const void* self) {{",
             module_decl.name,
             class_decl.name);
         generated.append_line_format(
@@ -459,9 +475,17 @@ std::vector<std::filesystem::path> emit_cabi_module(
             class_decl.cpp_name);
         generated.append_line("    if (__csbind23_self_cpp == nullptr)");
         generated.append_line("    {");
-        generated.append_line("        return nullptr;");
+        generated.append_line("        return -1;");
         generated.append_line("    }");
-        generated.append_line("    return typeid(*__csbind23_self_cpp).name();");
+        generated.append_line("    const auto& __csbind23_dynamic_type = typeid(*__csbind23_self_cpp);");
+        for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
+        {
+            generated.append_line_format("    if (__csbind23_dynamic_type == typeid({}))", module_decl.classes[i].cpp_name);
+            generated.append_line("    {");
+            generated.append_line_format("        return {};", i);
+            generated.append_line("    }");
+        }
+        generated.append_line_format("    return {};", class_type_id);
         generated.append_line("}");
         generated.append_line();
 

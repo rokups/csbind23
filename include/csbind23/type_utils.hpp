@@ -1,6 +1,7 @@
 #pragma once
 
 #include "csbind23/cabi/converter.hpp"
+#include "csbind23/detail/converter_internal.hpp"
 #include "csbind23/ir.hpp"
 
 #include <string>
@@ -115,6 +116,8 @@ struct MethodPointerTraits<ReturnType (ClassType::*)(Args...) const>
 };
 
 template <typename Type> TypeRef make_type_ref();
+template <typename Type> TypeRef make_param_type_ref();
+template <typename Type> TypeRef make_return_type_ref();
 
 template <typename Type> std::string base_type_name()
 {
@@ -217,12 +220,45 @@ template <typename Type> std::string cpp_type_name()
 
 template <typename Type> TypeRef make_type_ref()
 {
+    return make_param_type_ref<Type>();
+}
+
+template <typename Type> TypeRef make_param_type_ref()
+{
     TypeRef type_ref;
+    using NoRef = std::remove_reference_t<Type>;
     type_ref.cpp_name = base_type_name<Type>();
-    type_ref.c_abi_name = cabi::c_abi_type_name_for<Type>();
-    type_ref.pinvoke_name = cabi::pinvoke_type_name_for<Type>();
-    type_ref.is_const = std::is_const_v<std::remove_reference_t<Type>>;
-    type_ref.is_pointer = std::is_pointer_v<std::remove_reference_t<Type>>;
+    type_ref.c_abi_name = cabi::detail::c_abi_param_type_name_for<Type>();
+    type_ref.pinvoke_name = cabi::detail::pinvoke_param_type_name_for<Type>();
+    type_ref.is_pointer = std::is_pointer_v<NoRef>;
+    if (type_ref.is_pointer)
+    {
+        type_ref.is_const = std::is_const_v<std::remove_pointer_t<NoRef>>;
+    }
+    else
+    {
+        type_ref.is_const = std::is_const_v<NoRef>;
+    }
+    type_ref.is_reference = std::is_reference_v<Type>;
+    return type_ref;
+}
+
+template <typename Type> TypeRef make_return_type_ref()
+{
+    TypeRef type_ref;
+    using NoRef = std::remove_reference_t<Type>;
+    type_ref.cpp_name = base_type_name<Type>();
+    type_ref.c_abi_name = cabi::detail::c_abi_return_type_name_for<Type>();
+    type_ref.pinvoke_name = cabi::detail::pinvoke_return_type_name_for<Type>();
+    type_ref.is_pointer = std::is_pointer_v<NoRef>;
+    if (type_ref.is_pointer)
+    {
+        type_ref.is_const = std::is_const_v<std::remove_pointer_t<NoRef>>;
+    }
+    else
+    {
+        type_ref.is_const = std::is_const_v<NoRef>;
+    }
     type_ref.is_reference = std::is_reference_v<Type>;
     return type_ref;
 }
