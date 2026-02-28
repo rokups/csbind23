@@ -4,6 +4,7 @@
 #include "csbind23/type_utils.hpp"
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -14,6 +15,7 @@ namespace csbind23
 
 class ModuleBuilder;
 class ClassBuilder;
+class EnumBuilder;
 
 class BindingsGenerator
 {
@@ -83,6 +85,16 @@ private:
         if constexpr (!std::is_same_v<Base, Bare>)
         {
             assign_managed_converter<Base>(type_ref);
+        }
+
+        using EnumBase = std::remove_cv_t<std::remove_pointer_t<NoRef>>;
+        if constexpr (std::is_enum_v<EnumBase>)
+        {
+            if (type_ref.managed_type_name.empty())
+            {
+                type_ref.managed_type_name = detail::unqualified_type_name<EnumBase>();
+            }
+            type_ref.pinvoke_name = type_ref.managed_type_name;
         }
     }
 
@@ -182,6 +194,10 @@ public:
     template <typename ClassType, typename BaseType = void>
     ClassBuilder class_(std::string_view name = detail::unqualified_type_name<ClassType>(),
         std::string_view cpp_name = detail::qualified_type_name<ClassType>());
+
+    template <typename EnumType>
+    EnumBuilder enum_(std::string_view name = detail::unqualified_type_name<EnumType>(),
+        std::string_view cpp_name = detail::qualified_type_name<EnumType>());
 
 private:
     BindingsGenerator* owner_;
@@ -461,6 +477,33 @@ private:
     ClassDecl* class_decl_;
 };
 
+class EnumBuilder
+{
+public:
+    EnumBuilder(BindingsGenerator& owner, EnumDecl& enum_decl)
+        : owner_(&owner)
+        , enum_decl_(&enum_decl)
+    {
+    }
+
+    template <typename EnumType> EnumBuilder& value(std::string_view name, EnumType enum_value)
+    {
+        static_assert(std::is_enum_v<EnumType>, "EnumBuilder::value expects an enum value");
+
+        using Underlying = std::underlying_type_t<EnumType>;
+        EnumValueDecl value_decl;
+        value_decl.name = std::string(name);
+        value_decl.is_signed = std::is_signed_v<Underlying>;
+        value_decl.value = static_cast<std::uint64_t>(static_cast<Underlying>(enum_value));
+        enum_decl_->values.push_back(std::move(value_decl));
+        return *this;
+    }
+
+private:
+    BindingsGenerator* owner_;
+    EnumDecl* enum_decl_;
+};
+
 template <typename ClassType, typename BaseType>
 ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_name)
 {
@@ -474,6 +517,20 @@ ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_n
     }
     module_decl_->classes.push_back(std::move(class_decl));
     return ClassBuilder(*owner_, module_decl_->classes.back());
+}
+
+template <typename EnumType>
+EnumBuilder ModuleBuilder::enum_(std::string_view name, std::string_view cpp_name)
+{
+    static_assert(std::is_enum_v<EnumType>, "ModuleBuilder::enum_ expects an enum type");
+
+    using Underlying = std::underlying_type_t<EnumType>;
+    EnumDecl enum_decl;
+    enum_decl.name = std::string(name);
+    enum_decl.cpp_name = std::string(cpp_name);
+    enum_decl.underlying_type = owner_->make_bound_type_ref<Underlying>();
+    module_decl_->enums.push_back(std::move(enum_decl));
+    return EnumBuilder(*owner_, module_decl_->enums.back());
 }
 
 } // namespace csbind23

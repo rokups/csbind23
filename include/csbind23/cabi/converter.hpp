@@ -10,6 +10,21 @@
 namespace csbind23::cabi
 {
 
+namespace detail
+{
+
+template <typename Type, bool IsEnum = std::is_enum_v<Type>> struct scalar_storage_type
+{
+    using type = Type;
+};
+
+template <typename Type> struct scalar_storage_type<Type, true>
+{
+    using type = std::underlying_type_t<Type>;
+};
+
+} // namespace detail
+
 struct StringView
 {
     const char* str;
@@ -30,6 +45,28 @@ template <typename Type> struct Converter
     static constexpr std::string_view managed_finalize_from_pinvoke_statement() { return ""; }
     static c_abi_type to_c_abi(const cpp_type& value) { return value; }
     static cpp_type from_c_abi(const c_abi_type& value) { return value; }
+};
+
+template <typename Type>
+    requires(std::is_enum_v<Type>)
+struct Converter<Type>
+{
+    using cpp_type = Type;
+    using underlying_type = std::underlying_type_t<Type>;
+    using c_abi_type = typename Converter<underlying_type>::c_abi_type;
+
+    static constexpr std::string_view c_abi_type_name() { return Converter<underlying_type>::c_abi_type_name(); }
+    static constexpr std::string_view pinvoke_type_name() { return Converter<underlying_type>::pinvoke_type_name(); }
+
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        return Converter<underlying_type>::to_c_abi(static_cast<underlying_type>(value));
+    }
+
+    static cpp_type from_c_abi(const c_abi_type& value)
+    {
+        return static_cast<cpp_type>(Converter<underlying_type>::from_c_abi(value));
+    }
 };
 
 template <> struct Converter<void>
@@ -376,6 +413,62 @@ template <> struct Converter<const std::string*> : detail::ConstStringManagedInt
 
     static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
     static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+template <typename Type>
+    requires(std::is_arithmetic_v<std::remove_cv_t<Type>> || std::is_enum_v<std::remove_cv_t<Type>>)
+struct Converter<Type*>
+{
+    using cpp_type = Type*;
+    using value_type = std::remove_cv_t<Type>;
+    using storage_type = typename detail::scalar_storage_type<value_type>::type;
+    using c_abi_type = std::conditional_t<std::is_const_v<Type>, const storage_type*, storage_type*>;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return Converter<value_type>::pinvoke_type_name(); }
+    static c_abi_type to_c_abi(cpp_type value)
+    {
+        return reinterpret_cast<c_abi_type>(value);
+    }
+
+    static cpp_type from_c_abi(c_abi_type value)
+    {
+        return reinterpret_cast<cpp_type>(const_cast<storage_type*>(value));
+    }
+};
+
+template <typename Type>
+    requires(std::is_arithmetic_v<std::remove_cv_t<Type>> || std::is_enum_v<std::remove_cv_t<Type>>)
+struct Converter<Type&>
+{
+    using cpp_type = Type&;
+    using value_type = std::remove_cv_t<Type>;
+    using storage_type = typename detail::scalar_storage_type<value_type>::type;
+    using c_abi_type = std::conditional_t<std::is_const_v<Type>, const storage_type*, storage_type*>;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return Converter<value_type>::pinvoke_type_name(); }
+    static c_abi_type to_c_abi(cpp_type value) { return reinterpret_cast<c_abi_type>(&value); }
+
+    static cpp_type from_c_abi(c_abi_type value)
+    {
+        return *reinterpret_cast<Type*>(const_cast<storage_type*>(value));
+    }
+};
+
+template <typename Type>
+    requires(std::is_arithmetic_v<std::remove_cv_t<Type>> || std::is_enum_v<std::remove_cv_t<Type>>)
+struct Converter<const Type&>
+{
+    using cpp_type = const Type&;
+    using value_type = std::remove_cv_t<Type>;
+    using storage_type = typename detail::scalar_storage_type<value_type>::type;
+    using c_abi_type = const storage_type*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return Converter<value_type>::pinvoke_type_name(); }
+    static c_abi_type to_c_abi(cpp_type value) { return reinterpret_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *reinterpret_cast<const value_type*>(value); }
 };
 
 template <typename Type> struct Converter<Type*>

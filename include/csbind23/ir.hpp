@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 namespace csbind23
@@ -114,6 +115,21 @@ struct ClassDecl
     std::vector<PropertyDecl> properties;
 };
 
+struct EnumValueDecl
+{
+    std::string name;
+    std::uint64_t value = 0;
+    bool is_signed = true;
+};
+
+struct EnumDecl
+{
+    std::string name;
+    std::string cpp_name;
+    TypeRef underlying_type;
+    std::vector<EnumValueDecl> values;
+};
+
 struct ModuleDecl
 {
     std::string name;
@@ -122,6 +138,7 @@ struct ModuleDecl
     std::vector<std::string> cabi_includes;
     std::vector<FunctionDecl> functions;
     std::vector<ClassDecl> classes;
+    std::vector<EnumDecl> enums;
 };
 
 } // namespace csbind23

@@ -9,6 +9,22 @@
 namespace csbind23::cabi::detail
 {
 
+template <typename Type> std::string c_abi_type_name_for();
+
+template <typename Type> constexpr bool uses_typed_indirection_v =
+    std::is_arithmetic_v<std::remove_cv_t<Type>> || std::is_enum_v<std::remove_cv_t<Type>>;
+
+template <typename Type> std::string cv_qualified_c_abi_scalar_name_for()
+{
+    using Bare = std::remove_cv_t<Type>;
+    std::string type_name = c_abi_type_name_for<Bare>();
+    if constexpr (std::is_const_v<Type>)
+    {
+        return "const " + type_name;
+    }
+    return type_name;
+}
+
 template <typename Type> std::string c_abi_type_name_for()
 {
     using NoRef = std::remove_reference_t<Type>;
@@ -89,6 +105,11 @@ template <typename Type> std::string c_abi_param_type_name_for()
     using Bare = std::remove_cv_t<NoRef>;
     if constexpr (std::is_reference_v<Type>)
     {
+        if constexpr (uses_typed_indirection_v<NoRef>)
+        {
+            return cv_qualified_c_abi_scalar_name_for<NoRef>() + "*";
+        }
+
         if constexpr (std::is_const_v<NoRef>)
         {
             return "const void*";
@@ -98,6 +119,12 @@ template <typename Type> std::string c_abi_param_type_name_for()
 
     if constexpr (std::is_pointer_v<NoRef>)
     {
+        using Pointee = std::remove_pointer_t<NoRef>;
+        if constexpr (uses_typed_indirection_v<Pointee>)
+        {
+            return cv_qualified_c_abi_scalar_name_for<Pointee>() + "*";
+        }
+
         if constexpr (requires { Converter<NoRef>::c_abi_param_type_name(); })
         {
             return std::string(Converter<NoRef>::c_abi_param_type_name());
@@ -119,6 +146,11 @@ template <typename Type> std::string c_abi_return_type_name_for()
     using Bare = std::remove_cv_t<NoRef>;
     if constexpr (std::is_reference_v<Type>)
     {
+        if constexpr (uses_typed_indirection_v<NoRef>)
+        {
+            return cv_qualified_c_abi_scalar_name_for<NoRef>() + "*";
+        }
+
         if constexpr (std::is_const_v<NoRef>)
         {
             return "const void*";
@@ -128,6 +160,12 @@ template <typename Type> std::string c_abi_return_type_name_for()
 
     if constexpr (std::is_pointer_v<NoRef>)
     {
+        using Pointee = std::remove_pointer_t<NoRef>;
+        if constexpr (uses_typed_indirection_v<Pointee>)
+        {
+            return cv_qualified_c_abi_scalar_name_for<Pointee>() + "*";
+        }
+
         if constexpr (requires { Converter<NoRef>::c_abi_return_type_name(); })
         {
             return std::string(Converter<NoRef>::c_abi_return_type_name());
@@ -153,7 +191,7 @@ template <typename Type> std::string pinvoke_type_name_for()
     }
     if constexpr (std::is_reference_v<Type>)
     {
-        return "System.IntPtr";
+        return std::string(Converter<Type>::pinvoke_type_name());
     }
     return std::string(Converter<Bare>::pinvoke_type_name());
 }
@@ -164,7 +202,11 @@ template <typename Type> std::string pinvoke_param_type_name_for()
     using Bare = std::remove_cv_t<NoRef>;
     if constexpr (std::is_reference_v<Type>)
     {
-        return "System.IntPtr";
+        if constexpr (requires { Converter<Type>::pinvoke_param_type_name(); })
+        {
+            return std::string(Converter<Type>::pinvoke_param_type_name());
+        }
+        return pinvoke_type_name_for<Type>();
     }
 
     if constexpr (std::is_pointer_v<NoRef>)

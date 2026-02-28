@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -140,6 +141,11 @@ bool parameter_is_ref(const ParameterDecl& parameter)
         return true;
     }
 
+    if (parameter.type.is_pointer && !parameter.type.is_const && parameter.type.pinvoke_name != "System.IntPtr")
+    {
+        return true;
+    }
+
     if (parameter.type.has_managed_converter() && parameter.type.is_pointer && !parameter.type.is_const
         && parameter.type.cpp_name == "std::string")
     {
@@ -147,6 +153,20 @@ bool parameter_is_ref(const ParameterDecl& parameter)
     }
 
     return false;
+}
+
+bool parameter_is_direct_ref(const ParameterDecl& parameter)
+{
+    return parameter_is_ref(parameter) && parameter.type.managed_to_pinvoke_expression.empty();
+}
+
+std::string parameter_call_argument(const ParameterDecl& parameter)
+{
+    if (parameter_is_direct_ref(parameter))
+    {
+        return "ref " + parameter.name;
+    }
+    return parameter.name;
 }
 
 std::string reflection_parameter_type_expression(const ParameterDecl& parameter)
@@ -349,6 +369,29 @@ std::string csharp_api_class_name(const ModuleDecl& module_decl)
     return module_decl.name + "Api";
 }
 
+std::string csharp_enum_underlying_type(const EnumDecl& enum_decl)
+{
+    const auto& type_name = enum_decl.underlying_type.pinvoke_name;
+    if (type_name == "byte" || type_name == "sbyte" || type_name == "short" || type_name == "ushort"
+        || type_name == "int" || type_name == "uint" || type_name == "long" || type_name == "ulong")
+    {
+        return type_name;
+    }
+
+    return "int";
+}
+
+std::string csharp_enum_value_literal(const EnumDecl& enum_decl, const EnumValueDecl& value_decl)
+{
+    const std::string underlying = csharp_enum_underlying_type(enum_decl);
+    if (value_decl.is_signed)
+    {
+        return std::format("unchecked(({}){}L)", underlying, static_cast<std::int64_t>(value_decl.value));
+    }
+
+    return std::format("unchecked(({}){}UL)", underlying, value_decl.value);
+}
+
 std::string parameter_list_without_self(const FunctionDecl& function_decl)
 {
     std::string rendered;
@@ -446,7 +489,8 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
         {
             output.append(", ");
         }
-        output.append_format("{} {}", parameter.type.pinvoke_name, parameter.name);
+        output.append_format("{}{} {}", parameter_is_direct_ref(parameter) ? "ref " : "", parameter.type.pinvoke_name,
+            parameter.name);
         needs_separator = true;
     }
 
@@ -533,7 +577,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             continue;
         }
 
-        call_arguments.push_back(parameter.name);
+        call_arguments.push_back(parameter_call_argument(parameter));
     }
 
     const std::string call_arguments_rendered = join_arguments(call_arguments);
@@ -818,7 +862,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             callback_delegate_name(method_decl, index));
         for (const auto& parameter : method_decl.parameters)
         {
-            output.append_format(", {} {}", parameter.type.pinvoke_name, parameter.name);
+            output.append_format(", {}{} {}", parameter_is_direct_ref(parameter) ? "ref " : "",
+                parameter.type.pinvoke_name, parameter.name);
         }
         output.append_line(");");
         output.append_line_format(
@@ -871,7 +916,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         output.append_format("    private static {} {}(System.IntPtr self", method_decl.return_type.pinvoke_name, method_name);
         for (const auto& parameter : method_decl.parameters)
         {
-            output.append_format(", {} {}", parameter.type.pinvoke_name, parameter.name);
+            output.append_format(", {}{} {}", parameter_is_direct_ref(parameter) ? "ref " : "",
+                parameter.type.pinvoke_name, parameter.name);
         }
         output.append_line(")");
         output.append_line("    {");
@@ -892,7 +938,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         base_call_arguments.push_back("self");
         for (const auto& parameter : method_decl.parameters)
         {
-            base_call_arguments.push_back(parameter.name);
+            base_call_arguments.push_back(parameter_call_argument(parameter));
         }
         const std::string base_call_arguments_rendered = join_arguments(base_call_arguments);
         const std::string base_native_call = std::format(
@@ -934,7 +980,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             }
             else
             {
-                if (parameter.type.is_reference && !parameter.type.is_const)
+                if (parameter_is_ref(parameter))
                 {
                     managed_args.push_back("ref " + parameter.name);
                 }
@@ -1067,7 +1113,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
                 continue;
             }
 
-            converted_arguments.push_back(parameter.name);
+            converted_arguments.push_back(parameter_call_argument(parameter));
         }
 
         const std::string converted_arguments_rendered = join_arguments(converted_arguments);
@@ -1332,6 +1378,18 @@ std::vector<std::filesystem::path> emit_csharp_module(
     generated.append_line("}");
     generated.append_line();
 
+    for (const auto& enum_decl : module_decl.enums)
+    {
+        generated.append_line_format("public enum {} : {}", enum_decl.name, csharp_enum_underlying_type(enum_decl));
+        generated.append_line("{");
+        for (const auto& enum_value : enum_decl.values)
+        {
+            generated.append_line_format("    {} = {},", enum_value.name, csharp_enum_value_literal(enum_decl, enum_value));
+        }
+        generated.append_line("}");
+        generated.append_line();
+    }
+
     generated.append_line_format("internal static class {}Runtime", module_decl.name);
     generated.append_line("{");
     generated.append_line("    private static readonly System.Func<System.IntPtr, bool, object>[] __csbind23_typeFactories =");
@@ -1410,7 +1468,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 continue;
             }
 
-            call_arguments.push_back(parameter.name);
+            call_arguments.push_back(parameter_call_argument(parameter));
         }
 
         const std::string call_arguments_rendered = join_arguments(call_arguments);
