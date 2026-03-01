@@ -37,6 +37,10 @@ struct PInvoke
 {
 };
 
+struct Private
+{
+};
+
 struct CppSymbol
 {
     std::string_view value;
@@ -583,6 +587,18 @@ public:
         return *this;
     }
 
+    ClassBuilder& csharp_interface(std::string_view interface_name)
+    {
+        class_decl_->csharp_interfaces.push_back(std::string(interface_name));
+        return *this;
+    }
+
+    ClassBuilder& csharp_code(std::string_view member_code)
+    {
+        class_decl_->csharp_member_snippets.push_back(std::string(member_code));
+        return *this;
+    }
+
     template <auto MethodPtr> ClassBuilder& def()
     {
         return def<MethodPtr>(detail::function_export_name<MethodPtr>());
@@ -599,7 +615,15 @@ public:
     template <auto MethodPtr, typename... Options>
     ClassBuilder& def(std::string_view name, Options&&... options)
     {
-        return def(name, MethodPtr, std::forward<Options>(options)...);
+        if constexpr (std::is_member_function_pointer_v<decltype(MethodPtr)>)
+        {
+            return def(name, MethodPtr, std::forward<Options>(options)...);
+        }
+        else
+        {
+            return def(name, MethodPtr, CppSymbol{detail::function_symbol_name<MethodPtr>()},
+                std::forward<Options>(options)...);
+        }
     }
 
     template <typename... Args> ClassBuilder& ctor(Ownership ownership = Ownership::Auto)
@@ -634,7 +658,7 @@ public:
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options, false, def_options.pinvoke_only);
+            def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
         return *this;
     }
 
@@ -651,7 +675,32 @@ public:
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options, false, def_options.pinvoke_only);
+            def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args, typename... Options>
+    ClassBuilder& def(std::string_view name, ReturnType (*function_ptr)(ClassType&, Args...), Options&&... options)
+    {
+        (void)function_ptr;
+        const auto def_options = make_method_def_options(std::forward<Options>(options)...);
+        add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
+            def_options.trailing_default_argument_count, false, false, false,
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, true);
+        return *this;
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args, typename... Options>
+    ClassBuilder& def(
+        std::string_view name, ReturnType (*function_ptr)(const ClassType&, Args...), Options&&... options)
+    {
+        (void)function_ptr;
+        const auto def_options = make_method_def_options(std::forward<Options>(options)...);
+        add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
+            def_options.trailing_default_argument_count, false, false, false,
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, true);
         return *this;
     }
 
@@ -870,6 +919,7 @@ private:
         std::vector<std::string> csharp_attributes;
         std::string csharp_comment;
         std::vector<Arg> arg_options;
+        bool csharp_private = false;
     };
 
     template <typename Option> struct dependent_false : std::false_type
@@ -903,6 +953,11 @@ private:
         options.pinvoke_only = true;
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, Private)
+    {
+        options.csharp_private = true;
+    }
+
     static void apply_method_def_option(MethodDefOptions& options, CppSymbol cpp_symbol)
     {
         options.cpp_symbol = cpp_symbol.value;
@@ -931,7 +986,7 @@ private:
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, PInvoke, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, PInvoke, Private, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
@@ -940,7 +995,8 @@ private:
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
         std::vector<std::string> csharp_attributes = {}, std::string csharp_comment = {},
         std::vector<Arg> arg_options = {},
-        bool is_field_accessor = false, bool pinvoke_only = false)
+        bool is_field_accessor = false, bool pinvoke_only = false, bool csharp_private = false,
+        bool is_extension_method = false)
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
@@ -957,6 +1013,8 @@ private:
         method_decl.is_property_setter = is_property_setter;
         method_decl.is_field_accessor = is_field_accessor;
         method_decl.pinvoke_only = pinvoke_only;
+        method_decl.csharp_private = csharp_private;
+        method_decl.is_extension_method = is_extension_method;
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
         method_decl.csharp_attributes = std::move(csharp_attributes);
@@ -1093,7 +1151,7 @@ private:
         add_method<ClassType, ReturnType, Args...>(managed_name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options, false, def_options.pinvoke_only);
+            def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -1117,7 +1175,7 @@ private:
         add_method<ClassType, ReturnType, Args...>(managed_name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options, false, def_options.pinvoke_only);
+            def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -1155,6 +1213,24 @@ public:
         for (const auto class_index : class_indices_)
         {
             module_decl_->classes[class_index].instance_cache_type = std::string(instance_cache_type);
+        }
+        return *this;
+    }
+
+    GenericClassBuilder& csharp_interface(std::string_view interface_name)
+    {
+        for (const auto class_index : class_indices_)
+        {
+            module_decl_->classes[class_index].csharp_interfaces.push_back(std::string(interface_name));
+        }
+        return *this;
+    }
+
+    GenericClassBuilder& csharp_code(std::string_view member_code)
+    {
+        for (const auto class_index : class_indices_)
+        {
+            module_decl_->classes[class_index].csharp_member_snippets.push_back(std::string(member_code));
         }
         return *this;
     }

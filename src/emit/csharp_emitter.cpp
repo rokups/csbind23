@@ -1309,6 +1309,7 @@ void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& 
         output.append_line("        {");
 
         std::vector<std::string> call_arguments;
+        std::vector<std::string> finalize_statements;
         std::vector<std::string> post_assignments;
         call_arguments.reserve(instantiation->parameters.size());
         for (std::size_t index = 0; index < instantiation->parameters.size(); ++index)
@@ -1355,7 +1356,37 @@ void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& 
                         generic_name,
                         concrete_name,
                         parameter.name);
-                    call_arguments.push_back(typed_name);
+
+                    if (!parameter.type.managed_to_pinvoke_expression.empty())
+                    {
+                        const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
+                        const std::string converted = render_inline_template(
+                            parameter.type.managed_to_pinvoke_expression,
+                            typed_name,
+                            pinvoke_name,
+                            typed_name,
+                            module_decl.name);
+                        append_embedded_assignment(
+                            output,
+                            "            ",
+                            std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
+                            converted);
+                        call_arguments.push_back(pinvoke_name);
+
+                        if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
+                        {
+                            finalize_statements.push_back(render_inline_template(
+                                parameter.type.managed_finalize_to_pinvoke_statement,
+                                typed_name,
+                                pinvoke_name,
+                                pinvoke_name,
+                                module_decl.name));
+                        }
+                    }
+                    else
+                    {
+                        call_arguments.push_back(typed_name);
+                    }
                 }
             }
             else
@@ -1469,6 +1500,7 @@ void append_method_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl
         output.append_line("        {");
 
         std::vector<std::string> call_arguments;
+        std::vector<std::string> finalize_statements;
         std::vector<std::string> post_assignments;
         call_arguments.reserve(instantiation->parameters.size());
         for (std::size_t index = 0; index < instantiation->parameters.size(); ++index)
@@ -1574,9 +1606,6 @@ std::string generic_class_member_shape_key(const FunctionDecl& method_decl)
     for (const auto& parameter : method_decl.parameters)
     {
         key += parameter.is_output ? "#out" : "#in";
-        key += parameter.type.is_reference ? "#ref" : "#val";
-        key += parameter.type.is_pointer ? "#ptr" : "#scalar";
-        key += parameter.type.is_const ? "#const" : "#mutable";
         key += ";";
     }
     return key;
@@ -1947,7 +1976,8 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
         ? generic_class_type_parameter_name(static_cast<std::size_t>(shape.generic_return_slot_id), class_generic_arity)
         : wrapper_return_type(module_decl, first);
 
-    output.append_format("    public {} {}(", return_type,
+    const std::string method_access = first.csharp_private ? "private" : "public";
+    output.append_format("    {} {} {}(", method_access, return_type,
         managed_name(module_decl, CSharpNameKind::Method, method_group.name));
     for (std::size_t index = 0; index < first.parameters.size(); ++index)
     {
@@ -2046,7 +2076,37 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                         generic_name,
                         concrete_name,
                         parameter.name);
-                    call_arguments.push_back(typed_name);
+
+                    if (!parameter.type.managed_to_pinvoke_expression.empty())
+                    {
+                        const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
+                        const std::string converted = render_inline_template(
+                            parameter.type.managed_to_pinvoke_expression,
+                            typed_name,
+                            pinvoke_name,
+                            typed_name,
+                            module_decl.name);
+                        append_embedded_assignment(
+                            output,
+                            "            ",
+                            std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
+                            converted);
+                        call_arguments.push_back(pinvoke_name);
+
+                        if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
+                        {
+                            finalize_statements.push_back(render_inline_template(
+                                parameter.type.managed_finalize_to_pinvoke_statement,
+                                typed_name,
+                                pinvoke_name,
+                                pinvoke_name,
+                                module_decl.name));
+                        }
+                    }
+                    else
+                    {
+                        call_arguments.push_back(typed_name);
+                    }
                 }
             }
             else if (!parameter.type.managed_to_pinvoke_expression.empty())
@@ -2124,9 +2184,29 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
             const std::string concrete_name = wrapper_type_name(instantiation->return_type);
             const std::string generic_name = generic_class_type_parameter_name(
                 static_cast<std::size_t>(shape.generic_return_slot_id), class_generic_arity);
+            const bool has_generic_return_converter = !instantiation->return_type.managed_from_pinvoke_expression.empty();
             if (!needs_finally)
             {
-                output.append_line_format("            {} __csbind23_typed_result = {} ;", concrete_name, call);
+                if (has_generic_return_converter)
+                {
+                    output.append_line_format(
+                        "            {} __csbind23_result_ptr = {} ;", instantiation->return_type.pinvoke_name, call);
+                    const std::string converted = render_inline_template(
+                        instantiation->return_type.managed_from_pinvoke_expression,
+                        "__csbind23_result_ptr",
+                        "__csbind23_result_ptr",
+                        "__csbind23_result_ptr",
+                        module_decl.name);
+                    append_embedded_assignment(
+                        output,
+                        "            ",
+                        std::format("{} __csbind23_typed_result = ", concrete_name),
+                        converted);
+                }
+                else
+                {
+                    output.append_line_format("            {} __csbind23_typed_result = {} ;", concrete_name, call);
+                }
                 for (const auto& post_assignment : post_assignments)
                 {
                     output.append_line_format("            {}", post_assignment);
@@ -2141,7 +2221,26 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                 output.append_line_format("            {} __csbind23_typed_result = default!;", concrete_name);
                 output.append_line("            try");
                 output.append_line("            {");
-                output.append_line_format("                __csbind23_typed_result = {} ;", call);
+                if (has_generic_return_converter)
+                {
+                    output.append_line_format(
+                        "                {} __csbind23_result_ptr = {} ;", instantiation->return_type.pinvoke_name, call);
+                    const std::string converted = render_inline_template(
+                        instantiation->return_type.managed_from_pinvoke_expression,
+                        "__csbind23_result_ptr",
+                        "__csbind23_result_ptr",
+                        "__csbind23_result_ptr",
+                        module_decl.name);
+                    append_embedded_assignment(
+                        output,
+                        "                ",
+                        "__csbind23_typed_result = ",
+                        converted);
+                }
+                else
+                {
+                    output.append_line_format("                __csbind23_typed_result = {} ;", call);
+                }
                 for (const auto& post_assignment : post_assignments)
                 {
                     output.append_line_format("                {}", post_assignment);
@@ -2331,12 +2430,42 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     const auto class_slot_types =
         collect_generic_class_slot_types(class_group, ctor_groups, method_groups, class_generic_arity);
 
-    output.append_line_format("public sealed class {}<{}> : System.IDisposable",
+    std::vector<std::string> base_types;
+    base_types.push_back("System.IDisposable");
+    const auto& first_class_decl = *class_group.instantiations.front();
+    for (const auto& interface_name : first_class_decl.csharp_interfaces)
+    {
+        if (!interface_name.empty())
+        {
+            base_types.push_back(interface_name);
+        }
+    }
+
+    std::string base_clause;
+    for (std::size_t index = 0; index < base_types.size(); ++index)
+    {
+        if (index > 0)
+        {
+            base_clause += ", ";
+        }
+        base_clause += base_types[index];
+    }
+
+    output.append_line_format("public sealed class {}<{}> : {}",
         managed_name(module_decl, CSharpNameKind::Class, class_group.name),
-        generic_type_parameter_list(class_generic_arity));
+        generic_type_parameter_list(class_generic_arity),
+        base_clause);
     output.append_line("{");
     output.append_line("    private System.IntPtr _handle;");
     output.append_line("    private bool _ownsHandle;");
+    output.append_line();
+
+    output.append_line_format("    internal {}(System.IntPtr handle, bool ownsHandle)",
+        managed_name(module_decl, CSharpNameKind::Class, class_group.name));
+    output.append_line("    {");
+    output.append_line("        _handle = handle;");
+    output.append_line("        _ownsHandle = ownsHandle;");
+    output.append_line("    }");
     output.append_line();
 
     for (const auto& ctor_group : ctor_groups)
@@ -2347,6 +2476,15 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     for (const auto& method_group : method_groups)
     {
         append_generic_class_method(output, module_decl, class_group, method_group, class_generic_arity, class_slot_types);
+    }
+
+    for (const auto& snippet : first_class_decl.csharp_member_snippets)
+    {
+        if (!snippet.empty())
+        {
+            output.append_line(snippet);
+            output.append_line();
+        }
     }
 
     output.append_line("    ~" + managed_name(module_decl, CSharpNameKind::Class, class_group.name) + "()");
@@ -2613,7 +2751,8 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     }
     else
     {
-        output.append_format("    public {} {}(", return_type, managed_method);
+        output.append_format("    {} {} {}(", method_decl.csharp_private ? "private" : "public", return_type,
+            managed_method);
     }
     output.append(parameter_list);
     output.append_line(")");
@@ -3113,6 +3252,13 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     {
         base_types.push_back(interface_name_for_class(module_decl, *secondary_base));
     }
+    for (const auto& interface_name : class_decl.csharp_interfaces)
+    {
+        if (!interface_name.empty())
+        {
+            base_types.push_back(interface_name);
+        }
+    }
 
     std::string base_clause;
     for (std::size_t index = 0; index < base_types.size(); ++index)
@@ -3457,6 +3603,15 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
 
         output.append_line("    }");
         output.append_line();
+    }
+
+    for (const auto& snippet : class_decl.csharp_member_snippets)
+    {
+        if (!snippet.empty())
+        {
+            output.append_line(snippet);
+            output.append_line();
+        }
     }
 
     output.append_line("}");

@@ -321,6 +321,25 @@ void append_method_body(
         ? std::format("{}::{}", owner_class_name, method_decl.cpp_symbol)
         : method_decl.cpp_symbol;
 
+    if (method_decl.is_extension_method)
+    {
+        const std::string self_argument = "(*owner_instance)";
+        const std::string extension_call_arguments = call_arguments.empty()
+            ? self_argument
+            : std::format("{}, {}", self_argument, call_arguments);
+
+        if (method_decl.return_type.c_abi_name == "void")
+        {
+            output.append_line_format("    {}({});", method_expr, extension_call_arguments);
+            return;
+        }
+
+        output.append_line_format("    decltype(auto) result = {}({});", method_expr, extension_call_arguments);
+        output.append_line_format(
+            "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
+        return;
+    }
+
     if (method_decl.return_type.c_abi_name == "void")
     {
         output.append_line_format("    owner_instance->{}({});", method_expr, call_arguments);

@@ -176,16 +176,6 @@ GenericDispatchShape analyze_generic_dispatch_shape(const GenericFunctionGroup& 
 
         if (!all_same)
         {
-            for (const auto* instantiation : group.instantiations)
-            {
-                const auto& parameter = instantiation->parameters[index];
-                if (parameter.type.has_managed_converter())
-                {
-                    has_unsupported_varying_shape = true;
-                    shape.unsupported_reason = "varying generic slots with managed converters";
-                }
-            }
-
             varying_parameters[index] = true;
         }
     }
@@ -203,16 +193,6 @@ GenericDispatchShape analyze_generic_dispatch_shape(const GenericFunctionGroup& 
 
     if (!return_all_same)
     {
-        for (const auto* instantiation : group.instantiations)
-        {
-            const auto& return_type = instantiation->return_type;
-            if (return_type.is_pointer || return_type.is_reference || return_type.has_managed_converter())
-            {
-                has_unsupported_varying_shape = true;
-                shape.unsupported_reason = "varying generic return slots that are pointer/reference/converter-backed";
-            }
-        }
-
         varying_return = true;
     }
 

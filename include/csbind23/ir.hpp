@@ -70,6 +70,8 @@ struct FunctionDecl
     bool is_generic_instantiation = false;
     std::string generic_group_name;
     bool pinvoke_only = false;
+    bool csharp_private = false;
+    bool is_extension_method = false;
 
     bool is_constructor = false;
     bool is_method = false;
@@ -149,6 +151,8 @@ struct ClassDecl
     std::string instance_cache_type;
     std::vector<std::string> csharp_attributes;
     std::string csharp_comment;
+    std::vector<std::string> csharp_interfaces;
+    std::vector<std::string> csharp_member_snippets;
     std::vector<FunctionDecl> methods;
     std::vector<PropertyDecl> properties;
 };
