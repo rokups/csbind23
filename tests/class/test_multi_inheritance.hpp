@@ -30,9 +30,19 @@ class SecondaryBase
 public:
     virtual ~SecondaryBase() = default;
 
+    SecondaryBase()
+        : secondary_bias_(17)
+    {
+    }
+
     int secondary_scale(int value) const
     {
         return value * 2;
+    }
+
+    int secondary_bias_add(int value) const
+    {
+        return value + secondary_bias_;
     }
 
     virtual int secondary_virtual(int value)
@@ -44,6 +54,7 @@ public:
     {
         return secondary_virtual(value);
     }
+    int secondary_bias_;
 };
 
 class TertiaryBase
@@ -93,6 +104,7 @@ inline void register_bindings_multi_inheritance(BindingsGenerator& generator, st
 
     module.class_<multi_inheritance::SecondaryBase>()
         .def<&multi_inheritance::SecondaryBase::secondary_scale>()
+        .def<&multi_inheritance::SecondaryBase::secondary_bias_add>()
         .def<&multi_inheritance::SecondaryBase::secondary_virtual>(csbind23::Virtual{})
         .def<&multi_inheritance::SecondaryBase::secondary_virtual_through_native>();
 

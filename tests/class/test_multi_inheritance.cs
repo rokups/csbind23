@@ -27,6 +27,7 @@ public class MultiInheritanceTests
         ITertiaryBase tertiary = value;
 
         Assert.Equal(8, secondary.secondary_scale(4));
+        Assert.Equal(27, secondary.secondary_bias_add(10));
         Assert.Equal(7, tertiary.tertiary_subtract(10));
         Assert.Equal(12, value.derived_twice_primary(1));
     }
@@ -37,6 +38,7 @@ public class MultiInheritanceTests
         using var value = new MultiDerived(10);
 
         Assert.Equal(8, value.secondary_scale(4));
+        Assert.Equal(27, value.secondary_bias_add(10));
         Assert.Equal(7, value.tertiary_subtract(10));
         Assert.Equal(6, value.secondary_virtual_through_native(5));
         Assert.Equal(6, value.call_secondary_virtual_from_cpp(5));

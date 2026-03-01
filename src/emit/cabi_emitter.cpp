@@ -369,15 +369,24 @@ void append_director_method_override(TextWriter& output, const ClassDecl& class_
         }
     }
 
+    if (method_decl.is_const)
+    {
+        output.append_line_format("        auto* owner_instance = static_cast<const {}*>(this);", owner_class_name);
+    }
+    else
+    {
+        output.append_line_format("        auto* owner_instance = static_cast<{}*>(this);", owner_class_name);
+    }
+
     if (method_decl.return_type.c_abi_name == "void")
     {
-        output.append_line_format("        {}::{}({});", owner_class_name, method_decl.cpp_symbol, base_call_args);
+        output.append_line_format("        owner_instance->{}::{}({});", owner_class_name, method_decl.cpp_symbol, base_call_args);
         output.append_line("    }");
         output.append_line();
         return;
     }
 
-    output.append_line_format("        return {}::{}({});", owner_class_name, method_decl.cpp_symbol, base_call_args);
+    output.append_line_format("        return owner_instance->{}::{}({});", owner_class_name, method_decl.cpp_symbol, base_call_args);
     output.append_line("    }");
     output.append_line();
 }
@@ -478,12 +487,22 @@ void append_method_body(
         output.append_line("    auto* instance = __csbind23_self_cpp;");
     }
 
+    const std::string owner_class_name = method_decl.class_name.empty() ? class_decl.cpp_name : method_decl.class_name;
+    if (method_decl.is_const)
+    {
+        output.append_line_format("    auto* owner_instance = static_cast<const {}*>(instance);", owner_class_name);
+    }
+    else
+    {
+        output.append_line_format("    auto* owner_instance = static_cast<{}*>(instance);", owner_class_name);
+    }
+
     const auto parameters = leading_parameters(method_decl, parameter_count);
     append_converted_arguments(output, parameters);
 
     if (method_decl.is_field_accessor)
     {
-        const std::string field_expression = std::format("instance->{}", method_decl.cpp_symbol);
+        const std::string field_expression = std::format("owner_instance->{}", method_decl.cpp_symbol);
         if (method_decl.is_property_getter)
         {
             output.append_line_format("    decltype(auto) result = ({});", field_expression);
@@ -503,18 +522,17 @@ void append_method_body(
     }
 
     const std::string call_arguments = render_call_arguments(parameters);
-    const std::string owner_class_name = method_decl.class_name.empty() ? class_decl.cpp_name : method_decl.class_name;
     const std::string method_expr = explicit_base_call
         ? std::format("{}::{}", owner_class_name, method_decl.cpp_symbol)
         : method_decl.cpp_symbol;
 
     if (method_decl.return_type.c_abi_name == "void")
     {
-        output.append_line_format("    instance->{}({});", method_expr, call_arguments);
+        output.append_line_format("    owner_instance->{}({});", method_expr, call_arguments);
         return;
     }
 
-    output.append_line_format("    decltype(auto) result = instance->{}({});", method_expr, call_arguments);
+    output.append_line_format("    decltype(auto) result = owner_instance->{}({});", method_expr, call_arguments);
     output.append_line_format(
         "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
 }
