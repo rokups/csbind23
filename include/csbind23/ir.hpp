@@ -66,6 +66,7 @@ struct FunctionDecl
     Ownership return_ownership = Ownership::Auto;
     bool is_generic_instantiation = false;
     std::string generic_group_name;
+    bool pinvoke_only = false;
 
     bool is_constructor = false;
     bool is_method = false;
@@ -142,6 +143,7 @@ struct ClassDecl
     bool enable_virtual_overrides = false;
     bool is_generic_instantiation = false;
     std::string generic_group_name;
+    std::string instance_cache_type;
     std::vector<std::string> csharp_attributes;
     std::string csharp_comment;
     std::vector<FunctionDecl> methods;
@@ -172,6 +174,7 @@ struct ModuleDecl
     std::string csharp_namespace;
     std::function<std::string(CSharpNameKind, std::string_view)> csharp_name_formatter;
     std::string pinvoke_library;
+    std::string instance_cache_type = "DefaultInstanceCache<T>";
     std::vector<std::string> cabi_includes;
     std::vector<FunctionDecl> functions;
     std::vector<ClassDecl> classes;

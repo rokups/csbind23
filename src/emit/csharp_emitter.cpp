@@ -248,6 +248,95 @@ void emit_shared_pinvoke_types_if_needed(
     generated_files.push_back(write_csharp_file(output_root, "csbind23.types.g.cs", shared.str()));
 }
 
+void emit_shared_instance_cache_types_if_needed(
+    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
+{
+    const auto shared_path = output_root / "csbind23.instance_cache.g.cs";
+    if (std::filesystem::exists(shared_path))
+    {
+        return;
+    }
+
+    TextWriter shared(1024);
+    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    shared.append_line();
+    shared.append_line("internal interface IInstanceCache<T>");
+    shared.append_line("    where T : class");
+    shared.append_line("{");
+    shared.append_line("    void Register(System.IntPtr handle, T instance);");
+    shared.append_line("    void Unregister(System.IntPtr handle);");
+    shared.append_line("    bool TryGet(System.IntPtr handle, out T instance);");
+    shared.append_line("}");
+    shared.append_line();
+
+    shared.append_line("internal sealed class DefaultInstanceCache<T> : IInstanceCache<T>");
+    shared.append_line("    where T : class");
+    shared.append_line("{");
+    shared.append_line("    private readonly System.Threading.ReaderWriterLockSlim _lock = new System.Threading.ReaderWriterLockSlim(System.Threading.LockRecursionPolicy.NoRecursion);");
+    shared.append_line("    private readonly System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>> _instances =");
+    shared.append_line("        new System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>>();");
+    shared.append_line();
+    shared.append_line("    public void Register(System.IntPtr handle, T instance)");
+    shared.append_line("    {");
+    shared.append_line("        if (handle == System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            return;");
+    shared.append_line("        }");
+    shared.append_line("        _lock.EnterWriteLock();");
+    shared.append_line("        try");
+    shared.append_line("        {");
+    shared.append_line("            _instances[handle] = new System.WeakReference<T>(instance);");
+    shared.append_line("        }");
+    shared.append_line("        finally");
+    shared.append_line("        {");
+    shared.append_line("            _lock.ExitWriteLock();");
+    shared.append_line("        }");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public void Unregister(System.IntPtr handle)");
+    shared.append_line("    {");
+    shared.append_line("        if (handle == System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            return;");
+    shared.append_line("        }");
+    shared.append_line("        _lock.EnterWriteLock();");
+    shared.append_line("        try");
+    shared.append_line("        {");
+    shared.append_line("            _instances.Remove(handle);");
+    shared.append_line("        }");
+    shared.append_line("        finally");
+    shared.append_line("        {");
+    shared.append_line("            _lock.ExitWriteLock();");
+    shared.append_line("        }");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public bool TryGet(System.IntPtr handle, out T instance)");
+    shared.append_line("    {");
+    shared.append_line("        if (handle == System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            instance = null!;");
+    shared.append_line("            return false;");
+    shared.append_line("        }");
+    shared.append_line("        _lock.EnterReadLock();");
+    shared.append_line("        try");
+    shared.append_line("        {");
+    shared.append_line("            if (_instances.TryGetValue(handle, out var weak) && weak.TryGetTarget(out instance))");
+    shared.append_line("            {");
+    shared.append_line("                return true;");
+    shared.append_line("            }");
+    shared.append_line("        }");
+    shared.append_line("        finally");
+    shared.append_line("        {");
+    shared.append_line("            _lock.ExitReadLock();");
+    shared.append_line("        }");
+    shared.append_line("        instance = null!;");
+    shared.append_line("        return false;");
+    shared.append_line("    }");
+    shared.append_line("}");
+
+    generated_files.push_back(write_csharp_file(output_root, "csbind23.instance_cache.g.cs", shared.str()));
+}
+
 std::string pinvoke_return_type(const FunctionDecl& function_decl)
 {
     if (function_decl.is_constructor)
@@ -389,7 +478,7 @@ std::vector<const ClassDecl*> secondary_base_classes(const ModuleDecl& module_de
 bool is_wrapper_visible_method(const FunctionDecl& method_decl)
 {
     return !method_decl.is_constructor && method_decl.is_method && !method_decl.is_property_getter
-        && !method_decl.is_property_setter;
+    && !method_decl.is_property_setter && !method_decl.pinvoke_only;
 }
 
 std::string method_signature_key(const FunctionDecl& method_decl)
@@ -433,7 +522,8 @@ std::vector<GenericFunctionGroup> collect_generic_function_groups(const std::vec
     std::unordered_map<std::string, std::size_t> by_name;
     for (const auto& function_decl : functions)
     {
-        if (!function_decl.is_generic_instantiation || function_decl.generic_group_name.empty())
+        if (!function_decl.is_generic_instantiation || function_decl.generic_group_name.empty()
+            || function_decl.pinvoke_only)
         {
             continue;
         }
@@ -460,7 +550,8 @@ std::vector<GenericFunctionGroup> collect_generic_method_groups(const std::vecto
     for (const auto& emitted_method : methods)
     {
         const auto& method_decl = emitted_method.method;
-        if (!method_decl.is_generic_instantiation || method_decl.generic_group_name.empty())
+        if (!method_decl.is_generic_instantiation || method_decl.generic_group_name.empty()
+            || method_decl.pinvoke_only)
         {
             continue;
         }
@@ -808,6 +899,15 @@ std::string csharp_namespace_name(const ModuleDecl& module_decl)
         return module_decl.csharp_namespace;
     }
     return "CsBind23.Generated";
+}
+
+std::string resolved_instance_cache_type(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    const std::string configured = !class_decl.instance_cache_type.empty()
+        ? class_decl.instance_cache_type
+        : (!module_decl.instance_cache_type.empty() ? module_decl.instance_cache_type : "DefaultInstanceCache<T>");
+    const std::string managed_class = format_csharp_name(module_decl, CSharpNameKind::Class, class_decl.name);
+    return replace_all(configured, "<T>", std::format("<{}>", managed_class));
 }
 
 std::string managed_name(const ModuleDecl& module_decl, CSharpNameKind kind, std::string_view raw_name)
@@ -2598,7 +2698,7 @@ void append_interface_declaration(TextWriter& output, const ModuleDecl& module_d
     output.append_line("{");
     for (const auto& method_decl : class_decl.methods)
     {
-        if (!is_wrapper_visible_method(method_decl))
+        if (method_decl.pinvoke_only)
         {
             continue;
         }
@@ -2931,16 +3031,18 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     output.append_line();
 }
 
+void append_instance_cache_support(TextWriter& output, const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    output.append_line_format(
+        "    private static readonly {} __csbind23_registry = new();",
+        resolved_instance_cache_type(module_decl, class_decl));
+    output.append_line();
+}
+
 void append_virtual_director_support(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
     const std::vector<const FunctionDecl*>& virtual_methods)
 {
     const std::string managed_class = managed_class_name(module_decl, class_decl);
-    output.append_line("    private static readonly object __csbind23_registryLock = new object();");
-    output.append_line_format(
-        "    private static readonly System.Collections.Generic.Dictionary<System.IntPtr, "
-        "System.WeakReference<{}>> __csbind23_registry = new();",
-        managed_class);
-    output.append_line();
 
     const std::size_t mask_field_count = (virtual_methods.size() + 63) / 64;
     for (std::size_t chunk = 0; chunk < mask_field_count; ++chunk)
@@ -2993,52 +3095,6 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             index,
             virtual_mask_bit_literal(index));
     }
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line_format(
-        "    private static void __csbind23_RegisterInstance(System.IntPtr handle, {} instance)",
-        managed_class);
-    output.append_line("    {");
-    output.append_line("        if (handle == System.IntPtr.Zero)");
-    output.append_line("        {");
-    output.append_line("            return;");
-    output.append_line("        }");
-    output.append_line("        lock (__csbind23_registryLock)");
-    output.append_line("        {");
-    output.append_line_format(
-        "            __csbind23_registry[handle] = new System.WeakReference<{}>(instance);",
-        managed_class);
-    output.append_line("        }");
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line("    private static void __csbind23_UnregisterInstance(System.IntPtr handle)");
-    output.append_line("    {");
-    output.append_line("        if (handle == System.IntPtr.Zero)");
-    output.append_line("        {");
-    output.append_line("            return;");
-    output.append_line("        }");
-    output.append_line("        lock (__csbind23_registryLock)");
-    output.append_line("        {");
-    output.append_line("            __csbind23_registry.Remove(handle);");
-    output.append_line("        }");
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line_format(
-        "    private static bool __csbind23_TryGetInstance(System.IntPtr handle, out {} instance)",
-        managed_class);
-    output.append_line("    {");
-    output.append_line("        lock (__csbind23_registryLock)");
-    output.append_line("        {");
-    output.append_line("            if (__csbind23_registry.TryGetValue(handle, out var weak) && weak.TryGetTarget(out instance))");
-    output.append_line("            {");
-    output.append_line("                return true;");
-    output.append_line("            }");
-    output.append_line("        }");
-    output.append_line("        instance = null!;");
-    output.append_line("        return false;");
     output.append_line("    }");
     output.append_line();
 
@@ -3109,7 +3165,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         }
         output.append_line(")");
         output.append_line("    {");
-        output.append_line_format("        if (!__csbind23_TryGetInstance(self, out var instance))");
+        output.append_line_format("        if (!__csbind23_registry.TryGet(self, out var instance))");
         output.append_line("        {");
         if (!is_cabi_void(method_decl.return_type.c_abi_name))
         {
@@ -3220,6 +3276,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
     const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
     const bool has_virtual_support = !virtual_methods.empty();
+    const bool is_primary_base_class = is_primary_base_for_any_class(module_decl, class_decl);
 
     std::vector<std::string> base_types;
     if (has_base_class)
@@ -3247,7 +3304,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
 
     const std::string class_declaration_kind = has_virtual_support
         ? "partial class"
-        : (is_primary_base_for_any_class(module_decl, class_decl) ? "class" : "sealed class");
+        : (is_primary_base_class ? "class" : "sealed class");
     const std::string class_visibility = class_decl.is_generic_instantiation ? "internal" : "public";
 
     append_csharp_attributes(output, "", class_decl.csharp_attributes);
@@ -3256,8 +3313,9 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     output.append_line("{");
     if (!has_base_class)
     {
-        output.append_line("    protected System.IntPtr _handle;");
-        output.append_line("    protected bool _ownsHandle;");
+        const std::string handle_field_visibility = (has_virtual_support || is_primary_base_class) ? "protected" : "private";
+        output.append_line_format("    {} System.IntPtr _handle;", handle_field_visibility);
+        output.append_line_format("    {} bool _ownsHandle;", handle_field_visibility);
     }
     output.append_line();
 
@@ -3275,9 +3333,12 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         if (has_virtual_support)
         {
             output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
-            output.append_line("        __csbind23_RegisterInstance(_handle, this);");
-            output.append_line("        __csbind23_ConnectDirector();");
         }
+    }
+    output.append_line("        __csbind23_registry.Register(_handle, this);");
+    if (!has_base_class && has_virtual_support)
+    {
+        output.append_line("        __csbind23_ConnectDirector();");
     }
     output.append_line("    }");
     output.append_line();
@@ -3360,7 +3421,10 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         if (has_virtual_support)
         {
             output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
-            output.append_line("        __csbind23_RegisterInstance(_handle, this);");
+        }
+        output.append_line("        __csbind23_registry.Register(_handle, this);");
+        if (has_virtual_support)
+        {
             output.append_line("        __csbind23_ConnectDirector();");
         }
         output.append_line("    }");
@@ -3390,13 +3454,15 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line("        }");
         output.append_line();
 
+        output.append_line("        var __csbind23_oldHandle = _handle;");
+
         if (has_virtual_support)
         {
-            output.append_line("        var __csbind23_oldHandle = _handle;");
             output.append_line_format("        {}Native.{}_{}_disconnect_director(_handle);", module_name, module_name, class_decl.name);
-            output.append_line("        __csbind23_UnregisterInstance(__csbind23_oldHandle);");
-            output.append_line();
         }
+
+        output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
+        output.append_line();
 
         output.append_line("        if (_ownsHandle)");
         output.append_line("        {");
@@ -3413,6 +3479,8 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line();
     }
 
+    append_instance_cache_support(output, module_decl, class_decl);
+
     if (has_virtual_support)
     {
         append_virtual_director_support(output, module_decl, module_name, class_decl, virtual_methods);
@@ -3422,6 +3490,11 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     {
         const auto& method_decl = emitted_methods[index].method;
         if (method_decl.is_constructor)
+        {
+            continue;
+        }
+
+        if (method_decl.pinvoke_only)
         {
             continue;
         }
@@ -3535,6 +3608,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     std::vector<std::filesystem::path> generated_files;
     emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
+    emit_shared_instance_cache_types_if_needed(module_decl, output_root, generated_files);
 
     std::unordered_set<std::string> emitted_interfaces;
     for (const auto& class_decl : module_decl.classes)
@@ -3754,6 +3828,11 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& function_decl : module_decl.functions)
     {
+        if (function_decl.pinvoke_only)
+        {
+            continue;
+        }
+
         append_csharp_attributes(generated, "    ", function_decl.csharp_attributes);
         append_csharp_comment(generated, "    ", function_decl.csharp_comment);
         const std::string params = free_function_parameter_list(module_decl, function_decl);

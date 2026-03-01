@@ -33,6 +33,10 @@ struct Virtual
 {
 };
 
+struct PInvoke
+{
+};
+
 struct CppSymbol
 {
     std::string_view value;
@@ -259,6 +263,12 @@ public:
         return *this;
     }
 
+    ModuleBuilder& set_instance_cache_type(std::string_view instance_cache_type)
+    {
+        module_decl_->instance_cache_type = std::string(instance_cache_type);
+        return *this;
+    }
+
     template <auto Function> ModuleBuilder& def()
     {
         return def<Function>(detail::function_export_name<Function>());
@@ -280,7 +290,8 @@ public:
             ? std::string(detail::function_symbol_name<Function>())
             : std::string(def_options.cpp_symbol);
         return def_impl(name, Function, def_options.return_ownership, def_options.trailing_default_argument_count,
-            cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment, def_options.arg_options);
+            cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment, def_options.arg_options,
+            {}, def_options.pinvoke_only);
     }
 
     template <typename ReturnType, typename... Args, typename... Options>
@@ -288,7 +299,8 @@ public:
     {
         const auto def_options = make_function_def_options(std::forward<Options>(options)...);
         return def_impl(name, function_ptr, def_options.return_ownership, def_options.trailing_default_argument_count,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment, def_options.arg_options);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment, def_options.arg_options,
+            {}, def_options.pinvoke_only);
     }
 
     template <auto FirstFunction, auto... RestFunctions> ModuleBuilder& def_generic()
@@ -312,7 +324,7 @@ public:
         std::size_t trailing_default_argument_count, std::string_view cpp_symbol,
         std::vector<std::string> csharp_attributes = {}, std::string csharp_comment = {},
         std::vector<Arg> arg_options = {},
-        std::string_view exported_name = {})
+        std::string_view exported_name = {}, bool pinvoke_only = false)
     {
         (void)function_ptr;
 
@@ -324,6 +336,7 @@ public:
         function_decl.return_ownership = return_ownership;
         function_decl.trailing_default_argument_count =
             trailing_default_argument_count > sizeof...(Args) ? sizeof...(Args) : trailing_default_argument_count;
+        function_decl.pinvoke_only = pinvoke_only;
         function_decl.csharp_attributes = std::move(csharp_attributes);
         function_decl.csharp_comment = std::move(csharp_comment);
 
@@ -377,7 +390,7 @@ private:
 
         def_impl(managed_name, Function, def_options.return_ownership,
             def_options.trailing_default_argument_count, cpp_symbol, def_options.csharp_attributes,
-            def_options.csharp_comment, def_options.arg_options, export_name);
+            def_options.csharp_comment, def_options.arg_options, export_name, def_options.pinvoke_only);
 
         FunctionDecl& inserted = module_decl_->functions.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -388,6 +401,7 @@ private:
     {
         Ownership return_ownership = Ownership::Auto;
         std::size_t trailing_default_argument_count = 0;
+        bool pinvoke_only = false;
         std::string_view cpp_symbol = {};
         std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
@@ -430,6 +444,11 @@ private:
         options.trailing_default_argument_count = with_defaults.trailing_default_argument_count;
     }
 
+    static void apply_function_def_option(FunctionDefOptions& options, PInvoke)
+    {
+        options.pinvoke_only = true;
+    }
+
     static void apply_function_def_option(FunctionDefOptions& options, CppSymbol cpp_symbol)
     {
         options.cpp_symbol = cpp_symbol.value;
@@ -458,7 +477,7 @@ private:
     template <typename Option> static void apply_function_def_option(FunctionDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
+            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, PInvoke, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
     }
 
     template <typename... Options> static ClassOptions make_class_options(Options&&... options)
@@ -551,6 +570,12 @@ public:
         return *this;
     }
 
+    ClassBuilder& set_instance_cache_type(std::string_view instance_cache_type)
+    {
+        class_decl_->instance_cache_type = std::string(instance_cache_type);
+        return *this;
+    }
+
     template <auto MethodPtr> ClassBuilder& def()
     {
         return def<MethodPtr>(detail::function_export_name<MethodPtr>());
@@ -602,7 +627,7 @@ public:
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options);
+            def_options.arg_options, false, def_options.pinvoke_only);
         return *this;
     }
 
@@ -619,7 +644,7 @@ public:
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options);
+            def_options.arg_options, false, def_options.pinvoke_only);
         return *this;
     }
 
@@ -832,6 +857,7 @@ private:
         Ownership return_ownership = Ownership::Auto;
         std::size_t trailing_default_argument_count = 0;
         bool allow_override = false;
+        bool pinvoke_only = false;
         std::string_view cpp_symbol = {};
         std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
@@ -865,6 +891,11 @@ private:
         options.allow_override = true;
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, PInvoke)
+    {
+        options.pinvoke_only = true;
+    }
+
     static void apply_method_def_option(MethodDefOptions& options, CppSymbol cpp_symbol)
     {
         options.cpp_symbol = cpp_symbol.value;
@@ -893,7 +924,7 @@ private:
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, PInvoke, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
@@ -902,7 +933,7 @@ private:
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
         std::vector<std::string> csharp_attributes = {}, std::string csharp_comment = {},
         std::vector<Arg> arg_options = {},
-        bool is_field_accessor = false)
+        bool is_field_accessor = false, bool pinvoke_only = false)
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
@@ -918,6 +949,7 @@ private:
         method_decl.is_property_getter = is_property_getter;
         method_decl.is_property_setter = is_property_setter;
         method_decl.is_field_accessor = is_field_accessor;
+        method_decl.pinvoke_only = pinvoke_only;
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
         method_decl.csharp_attributes = std::move(csharp_attributes);
@@ -1054,7 +1086,7 @@ private:
         add_method<ClassType, ReturnType, Args...>(managed_name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options);
+            def_options.arg_options, false, def_options.pinvoke_only);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -1078,7 +1110,7 @@ private:
         add_method<ClassType, ReturnType, Args...>(managed_name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
-            def_options.arg_options);
+            def_options.arg_options, false, def_options.pinvoke_only);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -1107,6 +1139,15 @@ public:
         for (const auto class_index : class_indices_)
         {
             ClassBuilder(*owner_, module_decl_->classes[class_index]).template ctor<Args...>(ownership);
+        }
+        return *this;
+    }
+
+    GenericClassBuilder& set_instance_cache_type(std::string_view instance_cache_type)
+    {
+        for (const auto class_index : class_indices_)
+        {
+            module_decl_->classes[class_index].instance_cache_type = std::string(instance_cache_type);
         }
         return *this;
     }
