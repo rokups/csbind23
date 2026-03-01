@@ -1,4 +1,5 @@
 #include "csbind23/emit/csharp_emitter.hpp"
+#include "csbind23/emit/csharp_naming.hpp"
 
 #include "csbind23/cabi/converter.hpp"
 #include "csbind23/text_writer.hpp"
@@ -21,6 +22,8 @@ namespace csbind23::emit
 {
 namespace
 {
+
+std::string csharp_namespace_name(const ModuleDecl& module_decl);
 
 std::filesystem::path write_csharp_file(
     const std::filesystem::path& output_root, const std::string& filename, const std::string& content)
@@ -211,7 +214,7 @@ void emit_shared_pinvoke_types_if_needed(
     }
 
     TextWriter shared(256);
-    shared.append_line("namespace CsBind23.Generated;");
+    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
     shared.append_line("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]");
     shared.append_line("public readonly struct CsBind23StringView");
@@ -792,11 +795,84 @@ void append_default_variant_if_chain(TextWriter& output, std::string_view indent
 
 std::string csharp_api_class_name(const ModuleDecl& module_decl)
 {
-    if (!module_decl.csharp_api_class.empty())
+    const std::string default_name = !module_decl.csharp_api_class.empty()
+        ? module_decl.csharp_api_class
+        : module_decl.name + "Api";
+    return format_csharp_name(module_decl, CSharpNameKind::Class, default_name);
+}
+
+std::string csharp_namespace_name(const ModuleDecl& module_decl)
+{
+    if (!module_decl.csharp_namespace.empty())
     {
-        return module_decl.csharp_api_class;
+        return module_decl.csharp_namespace;
     }
-    return module_decl.name + "Api";
+    return "CsBind23.Generated";
+}
+
+std::string managed_name(const ModuleDecl& module_decl, CSharpNameKind kind, std::string_view raw_name)
+{
+    return format_csharp_name(module_decl, kind, raw_name);
+}
+
+std::string managed_class_name(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    return managed_name(module_decl, CSharpNameKind::Class, class_decl.name);
+}
+
+std::string managed_function_name(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+{
+    return managed_name(module_decl, CSharpNameKind::Function, function_decl.name);
+}
+
+std::string managed_method_name(const ModuleDecl& module_decl, const FunctionDecl& method_decl)
+{
+    return managed_name(module_decl, CSharpNameKind::Method, method_decl.name);
+}
+
+std::string managed_property_name(const ModuleDecl& module_decl, const PropertyDecl& property_decl)
+{
+    return managed_name(module_decl,
+        property_decl.is_field_projection ? CSharpNameKind::MemberVar : CSharpNameKind::Property,
+        property_decl.name);
+}
+
+std::string managed_enum_name(const ModuleDecl& module_decl, const EnumDecl& enum_decl)
+{
+    return managed_name(module_decl, CSharpNameKind::Class, enum_decl.name);
+}
+
+std::string managed_enum_value_name(const ModuleDecl& module_decl, const EnumValueDecl& value_decl)
+{
+    return managed_name(module_decl, CSharpNameKind::MemberVar, value_decl.name);
+}
+
+void append_csharp_comment(TextWriter& output, std::string_view indent, std::string_view comment)
+{
+    const std::size_t first = comment.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos)
+    {
+        return;
+    }
+
+    const std::size_t last = comment.find_last_not_of(" \t\r\n");
+    std::string normalized(comment.substr(first, last - first + 1));
+    std::string current_line;
+    for (char ch : normalized)
+    {
+        if (ch == '\r')
+        {
+            continue;
+        }
+        if (ch == '\n')
+        {
+            output.append_line_format("{}// {}", indent, current_line);
+            current_line.clear();
+            continue;
+        }
+        current_line.push_back(ch);
+    }
+    output.append_line_format("{}// {}", indent, current_line);
 }
 
 std::string csharp_enum_underlying_type(const EnumDecl& enum_decl)
@@ -1093,11 +1169,13 @@ std::string generic_expected_type_tuples(const GenericFunctionGroup& group, cons
     return join_arguments(tuples);
 }
 
-std::string generic_dispatch_not_supported_message(const GenericFunctionGroup& group, const GenericDispatchShape& shape)
+std::string generic_dispatch_not_supported_message(
+    const ModuleDecl& module_decl, CSharpNameKind name_kind, const GenericFunctionGroup& group,
+    const GenericDispatchShape& shape)
 {
     std::string message = std::format(
         "No generic mapping for {} with provided generic type arguments.",
-        group.name);
+        managed_name(module_decl, name_kind, group.name));
 
     const std::string expected_tuples = generic_expected_type_tuples(group, shape);
     if (!expected_tuples.empty())
@@ -1331,7 +1409,8 @@ void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& 
         : wrapper_return_type(module_decl, first);
     const std::string generic_parameter_list = generic_type_parameter_list(shape.generic_arity);
 
-    output.append_format("    public static {} {}<{}>(", return_type, group.name, generic_parameter_list);
+    output.append_format("    public static {} {}<{}>(", return_type,
+        managed_name(module_decl, CSharpNameKind::Function, group.name), generic_parameter_list);
     for (std::size_t index = 0; index < first.parameters.size(); ++index)
     {
         const auto& parameter = first.parameters[index];
@@ -1349,7 +1428,8 @@ void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& 
     output.append_line("    {");
 
     const std::string diagnostics_message =
-        csharp_string_literal_escape(generic_dispatch_not_supported_message(group, shape));
+        csharp_string_literal_escape(
+            generic_dispatch_not_supported_message(module_decl, CSharpNameKind::Function, group, shape));
     if (!shape.supported)
     {
         output.append_line_format("        throw new System.NotSupportedException(\"{}\");", diagnostics_message);
@@ -1433,7 +1513,8 @@ void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& 
             }
         }
 
-        const std::string call = std::format("{}({})", instantiation->name, join_arguments(call_arguments));
+        const std::string call =
+            std::format("{}({})", managed_method_name(module_decl, *instantiation), join_arguments(call_arguments));
         if (return_type == "void")
         {
             output.append_line_format("            {} ;", call);
@@ -1488,7 +1569,8 @@ void append_method_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl
         : wrapper_return_type(module_decl, first);
     const std::string generic_parameter_list = generic_type_parameter_list(shape.generic_arity);
 
-    output.append_format("    public {} {}<{}>(", return_type, group.name, generic_parameter_list);
+    output.append_format("    public {} {}<{}>(", return_type,
+        managed_name(module_decl, CSharpNameKind::Method, group.name), generic_parameter_list);
     for (std::size_t index = 0; index < first.parameters.size(); ++index)
     {
         const auto& parameter = first.parameters[index];
@@ -1506,7 +1588,8 @@ void append_method_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl
     output.append_line("    {");
 
     const std::string diagnostics_message =
-        csharp_string_literal_escape(generic_dispatch_not_supported_message(group, shape));
+        csharp_string_literal_escape(
+            generic_dispatch_not_supported_message(module_decl, CSharpNameKind::Method, group, shape));
     if (!shape.supported)
     {
         output.append_line_format("        throw new System.NotSupportedException(\"{}\");", diagnostics_message);
@@ -1590,7 +1673,8 @@ void append_method_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl
             }
         }
 
-        const std::string call = std::format("{}({})", instantiation->name, join_arguments(call_arguments));
+        const std::string call =
+            std::format("{}({})", managed_method_name(module_decl, *instantiation), join_arguments(call_arguments));
         if (return_type == "void")
         {
             output.append_line_format("            {} ;", call);
@@ -1783,7 +1867,7 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
     const auto shape = analyze_generic_dispatch_shape(ctor_group);
     const bool use_shape_for_parameters = shape.supported;
     const FunctionDecl& first = *ctor_group.instantiations.front();
-    output.append_format("    public {}(", class_group.name);
+    output.append_format("    public {}(", managed_name(module_decl, CSharpNameKind::Class, class_group.name));
     for (std::size_t index = 0; index < first.parameters.size(); ++index)
     {
         const auto& parameter = first.parameters[index];
@@ -1939,7 +2023,7 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
 
     output.append_line_format(
         "        throw new System.NotSupportedException(\"No generic mapping for {} with provided generic type arguments.\");",
-        class_group.name);
+        managed_name(module_decl, CSharpNameKind::Class, class_group.name));
     output.append_line("    }");
     output.append_line();
 }
@@ -2012,7 +2096,8 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
         ? generic_class_type_parameter_name(static_cast<std::size_t>(shape.generic_return_slot_id), class_generic_arity)
         : wrapper_return_type(module_decl, first);
 
-    output.append_format("    public {} {}(", return_type, method_group.name);
+    output.append_format("    public {} {}(", return_type,
+        managed_name(module_decl, CSharpNameKind::Method, method_group.name));
     for (std::size_t index = 0; index < first.parameters.size(); ++index)
     {
         const auto& parameter = first.parameters[index];
@@ -2031,8 +2116,8 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
 
     const std::string diagnostics_message = csharp_string_literal_escape(std::format(
         "No generic mapping for {}.{} with provided generic type arguments.",
-        class_group.name,
-        method_group.name));
+        managed_name(module_decl, CSharpNameKind::Class, class_group.name),
+        managed_name(module_decl, CSharpNameKind::Method, method_group.name)));
 
     for (std::size_t inst_index = 0; inst_index < method_group.instantiations.size(); ++inst_index)
     {
@@ -2395,7 +2480,8 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     const auto class_slot_types =
         collect_generic_class_slot_types(class_group, ctor_groups, method_groups, class_generic_arity);
 
-    output.append_line_format("public sealed class {}<{}> : System.IDisposable", class_group.name,
+    output.append_line_format("public sealed class {}<{}> : System.IDisposable",
+        managed_name(module_decl, CSharpNameKind::Class, class_group.name),
         generic_type_parameter_list(class_generic_arity));
     output.append_line("{");
     output.append_line("    private System.IntPtr _handle;");
@@ -2412,7 +2498,7 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         append_generic_class_method(output, module_decl, class_group, method_group, class_generic_arity, class_slot_types);
     }
 
-    output.append_line("    ~" + class_group.name + "()");
+    output.append_line("    ~" + managed_name(module_decl, CSharpNameKind::Class, class_group.name) + "()");
     output.append_line("    {");
     output.append_line("        ReleaseUnmanaged();");
     output.append_line("    }");
@@ -2482,9 +2568,9 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     output.append_line();
 }
 
-std::string interface_name_for_class(const ClassDecl& class_decl)
+std::string interface_name_for_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
-    return "I" + class_decl.name;
+    return "I" + managed_class_name(module_decl, class_decl);
 }
 
 bool is_primary_base_for_any_class(const ModuleDecl& module_decl, const ClassDecl& candidate)
@@ -2508,7 +2594,7 @@ bool is_primary_base_for_any_class(const ModuleDecl& module_decl, const ClassDec
 
 void append_interface_declaration(TextWriter& output, const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
-    output.append_line_format("public interface {}", interface_name_for_class(class_decl));
+    output.append_line_format("public interface {}", interface_name_for_class(module_decl, class_decl));
     output.append_line("{");
     for (const auto& method_decl : class_decl.methods)
     {
@@ -2520,7 +2606,7 @@ void append_interface_declaration(TextWriter& output, const ModuleDecl& module_d
         output.append_line_format(
             "    {} {}({});",
             wrapper_return_type(module_decl, method_decl),
-            method_decl.name,
+            managed_method_name(module_decl, method_decl),
             parameter_list_without_self(method_decl));
     }
     output.append_line("}");
@@ -2646,6 +2732,7 @@ bool class_has_owned_ctor(const ClassDecl& class_decl)
 void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
     const FunctionDecl& method_decl, bool is_virtual, bool is_override, std::size_t virtual_index)
 {
+    const std::string managed_method = managed_method_name(module_decl, method_decl);
     const std::string parameter_list = parameter_list_without_self(method_decl);
     const std::string native_name =
         std::format("{}_{}_{}", module_name, class_decl.name, exported_symbol_name(method_decl));
@@ -2653,26 +2740,27 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     const std::string return_type = wrapper_return_type(module_decl, method_decl);
 
     append_csharp_attributes(output, "    ", method_decl.csharp_attributes);
+    append_csharp_comment(output, "    ", method_decl.csharp_comment);
 
     if (method_decl.is_generic_instantiation)
     {
-        output.append_format("    private {} {}(", return_type, method_decl.name);
+        output.append_format("    private {} {}(", return_type, managed_method);
     }
     else if (method_decl.is_property_getter || method_decl.is_property_setter)
     {
-        output.append_format("    private {} {}(", return_type, method_decl.name);
+        output.append_format("    private {} {}(", return_type, managed_method);
     }
     else if (is_override)
     {
-        output.append_format("    public override {} {}(", return_type, method_decl.name);
+        output.append_format("    public override {} {}(", return_type, managed_method);
     }
     else if (is_virtual)
     {
-        output.append_format("    public virtual {} {}(", return_type, method_decl.name);
+        output.append_format("    public virtual {} {}(", return_type, managed_method);
     }
     else
     {
-        output.append_format("    public {} {}(", return_type, method_decl.name);
+        output.append_format("    public {} {}(", return_type, managed_method);
     }
     output.append(parameter_list);
     output.append_line(")");
@@ -2846,11 +2934,12 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
 void append_virtual_director_support(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
     const std::vector<const FunctionDecl*>& virtual_methods)
 {
+    const std::string managed_class = managed_class_name(module_decl, class_decl);
     output.append_line("    private static readonly object __csbind23_registryLock = new object();");
     output.append_line_format(
         "    private static readonly System.Collections.Generic.Dictionary<System.IntPtr, "
         "System.WeakReference<{}>> __csbind23_registry = new();",
-        class_decl.name);
+        managed_class);
     output.append_line();
 
     const std::size_t mask_field_count = (virtual_methods.size() + 63) / 64;
@@ -2899,8 +2988,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             "        {} |= {}.__csbind23_DerivedClassHasMethod(this, \"{}\", typeof({}), __csbind23_methodTypes{}, {});",
             virtual_mask_field_name(chunk),
             csharp_api_class_name(module_decl),
-            method_decl.name,
-            class_decl.name,
+            managed_method_name(module_decl, method_decl),
+            managed_class,
             index,
             virtual_mask_bit_literal(index));
     }
@@ -2909,7 +2998,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
     output.append_line_format(
         "    private static void __csbind23_RegisterInstance(System.IntPtr handle, {} instance)",
-        class_decl.name);
+        managed_class);
     output.append_line("    {");
     output.append_line("        if (handle == System.IntPtr.Zero)");
     output.append_line("        {");
@@ -2919,7 +3008,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
     output.append_line("        {");
     output.append_line_format(
         "            __csbind23_registry[handle] = new System.WeakReference<{}>(instance);",
-        class_decl.name);
+        managed_class);
     output.append_line("        }");
     output.append_line("    }");
     output.append_line();
@@ -2939,7 +3028,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
     output.append_line_format(
         "    private static bool __csbind23_TryGetInstance(System.IntPtr handle, out {} instance)",
-        class_decl.name);
+        managed_class);
     output.append_line("    {");
     output.append_line("        lock (__csbind23_registryLock)");
     output.append_line("        {");
@@ -3094,7 +3183,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
         if (is_cabi_void(method_decl.return_type.c_abi_name))
         {
-            output.append_line_format("        instance.{}({});", method_decl.name, invoke_args);
+            output.append_line_format("        instance.{}({});", managed_method_name(module_decl, method_decl), invoke_args);
             output.append_line("        return;");
         }
         else
@@ -3102,7 +3191,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             output.append_line_format(
                 "        {} __csbind23_result = instance.{}({});",
                 wrapper_return_type(module_decl, method_decl),
-                method_decl.name,
+                managed_method_name(module_decl, method_decl),
                 invoke_args);
 
             if (!method_decl.return_type.managed_to_pinvoke_expression.empty())
@@ -3124,6 +3213,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
 void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl)
 {
+    const std::string managed_class = managed_class_name(module_decl, class_decl);
     const ClassDecl* base_class = primary_base_class(module_decl, class_decl);
     const bool has_base_class = base_class != nullptr;
     const bool emits_destroy = class_has_owned_ctor(class_decl);
@@ -3134,7 +3224,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     std::vector<std::string> base_types;
     if (has_base_class)
     {
-        base_types.push_back(base_class->name);
+        base_types.push_back(managed_class_name(module_decl, *base_class));
     }
     else
     {
@@ -3142,7 +3232,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     }
     for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
     {
-        base_types.push_back(interface_name_for_class(*secondary_base));
+        base_types.push_back(interface_name_for_class(module_decl, *secondary_base));
     }
 
     std::string base_clause;
@@ -3161,7 +3251,8 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     const std::string class_visibility = class_decl.is_generic_instantiation ? "internal" : "public";
 
     append_csharp_attributes(output, "", class_decl.csharp_attributes);
-    output.append_line_format("{} {} {} : {}", class_visibility, class_declaration_kind, class_decl.name, base_clause);
+    append_csharp_comment(output, "", class_decl.csharp_comment);
+    output.append_line_format("{} {} {} : {}", class_visibility, class_declaration_kind, managed_class, base_clause);
     output.append_line("{");
     if (!has_base_class)
     {
@@ -3170,7 +3261,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     }
     output.append_line();
 
-    output.append_format("    internal {}(System.IntPtr handle, bool ownsHandle)", class_decl.name);
+    output.append_format("    internal {}(System.IntPtr handle, bool ownsHandle)", managed_class);
     if (has_base_class)
     {
         output.append(" : base(handle, ownsHandle)");
@@ -3202,7 +3293,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         const std::string create_name = std::format("{}_{}_create", module_name, class_decl.name);
         const bool owns_handle = infer_ownership(method_decl) == Ownership::Owned;
 
-        output.append_format("    public {}(", class_decl.name);
+        output.append_format("    public {}(", managed_class);
         output.append(parameter_list);
         output.append(")");
         if (has_base_class)
@@ -3285,7 +3376,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line("    }");
         output.append_line();
 
-        output.append_line_format("    ~{}()", class_decl.name);
+        output.append_line_format("    ~{}()", managed_class);
         output.append_line("    {");
         output.append_line("        ReleaseUnmanaged();");
         output.append_line("    }");
@@ -3406,15 +3497,26 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             ? wrapper_return_type(module_decl, *getter_decl)
             : wrapper_type_name(property_decl.type);
 
-        output.append_line_format("    public {} {}", property_type, property_decl.name);
+        append_csharp_comment(output, "    ", property_decl.csharp_comment);
+        output.append_line_format("    public {} {}", property_type, managed_property_name(module_decl, property_decl));
         output.append_line("    {");
         if (property_decl.has_getter)
         {
-            output.append_line_format("        get => {}();", property_decl.getter_name);
+            const auto getter = std::find_if(class_decl.methods.begin(), class_decl.methods.end(),
+                [&property_decl](const FunctionDecl& method_decl) { return method_decl.name == property_decl.getter_name; });
+            if (getter != class_decl.methods.end())
+            {
+                output.append_line_format("        get => {}();", managed_method_name(module_decl, *getter));
+            }
         }
         if (property_decl.has_setter)
         {
-            output.append_line_format("        set => {}(value);", property_decl.setter_name);
+            const auto setter = std::find_if(class_decl.methods.begin(), class_decl.methods.end(),
+                [&property_decl](const FunctionDecl& method_decl) { return method_decl.name == property_decl.setter_name; });
+            if (setter != class_decl.methods.end())
+            {
+                output.append_line_format("        set => {}(value);", managed_method_name(module_decl, *setter));
+            }
         }
         output.append_line("    }");
         output.append_line();
@@ -3445,19 +3547,19 @@ std::vector<std::filesystem::path> emit_csharp_module(
             }
 
             TextWriter interface_file(512);
-            interface_file.append_line("namespace CsBind23.Generated;");
+            interface_file.append_line_format("namespace {};", csharp_namespace_name(module_decl));
             interface_file.append_line();
             append_interface_declaration(interface_file, module_decl, *secondary_base);
             generated_files.push_back(write_csharp_file(
                 output_root,
-                module_decl.name + "." + interface_name_for_class(*secondary_base) + ".g.cs",
+                module_decl.name + "." + interface_name_for_class(module_decl, *secondary_base) + ".g.cs",
                 interface_file.str()));
         }
     }
 
     TextWriter generated(3072);
 
-    generated.append_line("namespace CsBind23.Generated;");
+    generated.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     generated.append_line();
     generated.append_line_format("internal static class {}Native", module_decl.name);
     generated.append_line("{");
@@ -3552,11 +3654,11 @@ std::vector<std::filesystem::path> emit_csharp_module(
             generated.append_line("[System.Flags]");
         }
         append_csharp_attributes(generated, "", enum_decl.csharp_attributes);
-        generated.append_line_format("public enum {} : {}", enum_decl.name, csharp_enum_underlying_type(enum_decl));
+        generated.append_line_format("public enum {} : {}", managed_enum_name(module_decl, enum_decl), csharp_enum_underlying_type(enum_decl));
         generated.append_line("{");
         for (const auto& enum_value : enum_decl.values)
         {
-            generated.append_line_format("    {} = {},", enum_value.name, csharp_enum_value_literal(enum_decl, enum_value));
+            generated.append_line_format("    {} = {},", managed_enum_value_name(module_decl, enum_value), csharp_enum_value_literal(enum_decl, enum_value));
         }
         generated.append_line("}");
         generated.append_line();
@@ -3575,7 +3677,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         else
         {
-            generated.append_line_format("            (handle, ownsHandle) => new {}(handle, ownsHandle),", class_decl.name);
+            generated.append_line_format(
+                "            (handle, ownsHandle) => new {}(handle, ownsHandle),", managed_class_name(module_decl, class_decl));
         }
     }
     generated.append_line("        };");
@@ -3607,7 +3710,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         else
         {
-            generated.append_line_format("        return new {}(handle, ownsHandle);", class_decl.name);
+            generated.append_line_format("        return new {}(handle, ownsHandle);", managed_class_name(module_decl, class_decl));
         }
         generated.append_line("    }");
         generated.append_line();
@@ -3652,6 +3755,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     for (const auto& function_decl : module_decl.functions)
     {
         append_csharp_attributes(generated, "    ", function_decl.csharp_attributes);
+        append_csharp_comment(generated, "    ", function_decl.csharp_comment);
         const std::string params = free_function_parameter_list(module_decl, function_decl);
         const std::string return_type = wrapper_return_type(module_decl, function_decl);
         const std::string native_name = module_decl.name + "_" + exported_symbol_name(function_decl);
@@ -3659,7 +3763,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
         const std::size_t optional_start = function_decl.parameters.size() - defaults;
         const std::string method_visibility = function_decl.is_generic_instantiation ? "private" : "public";
 
-        generated.append_format("    {} static {} {}(", method_visibility, return_type, function_decl.name);
+        generated.append_format(
+            "    {} static {} {}(", method_visibility, return_type, managed_function_name(module_decl, function_decl));
         generated.append(params);
         generated.append_line(")");
         generated.append_line("    {");
@@ -3930,27 +4035,28 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
 
         TextWriter class_file(2048);
-        class_file.append_line("namespace CsBind23.Generated;");
+        class_file.append_line_format("namespace {};", csharp_namespace_name(module_decl));
         class_file.append_line();
         append_wrapper_class(class_file, module_decl, module_decl.name, class_decl);
 
         const auto& class_written = class_file.str();
         generated_files.push_back(
-            write_csharp_file(output_root, module_decl.name + "." + class_decl.name + ".g.cs", class_written));
+            write_csharp_file(output_root, module_decl.name + "." + managed_class_name(module_decl, class_decl) + ".g.cs", class_written));
     }
 
     const auto generic_class_groups = collect_generic_class_groups(module_decl.classes);
     for (const auto& generic_class_group : generic_class_groups)
     {
         TextWriter generic_class_file(2048);
-        generic_class_file.append_line("namespace CsBind23.Generated;");
+        generic_class_file.append_line_format("namespace {};", csharp_namespace_name(module_decl));
         generic_class_file.append_line();
         append_generic_class_wrapper(generic_class_file, module_decl, generic_class_group);
 
         const auto& generic_class_written = generic_class_file.str();
         generated_files.push_back(write_csharp_file(
             output_root,
-            module_decl.name + "." + generic_class_group.name + ".g.cs",
+            module_decl.name + "." + managed_name(module_decl, CSharpNameKind::Class, generic_class_group.name)
+                + ".g.cs",
             generic_class_written));
     }
 

@@ -3,10 +3,21 @@
 #include <string>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <string_view>
 #include <vector>
 
 namespace csbind23
 {
+
+enum class CSharpNameKind
+{
+    Class,
+    Function,
+    Method,
+    Property,
+    MemberVar,
+};
 
 enum class Ownership
 {
@@ -69,6 +80,7 @@ struct FunctionDecl
     std::string class_name;
     std::string virtual_slot_name;
     std::vector<std::string> csharp_attributes;
+    std::string csharp_comment;
 };
 
 struct PropertyDecl
@@ -79,6 +91,8 @@ struct PropertyDecl
     TypeRef type;
     bool has_getter = false;
     bool has_setter = false;
+    bool is_field_projection = false;
+    std::string csharp_comment;
 };
 
 inline Ownership infer_ownership(const FunctionDecl& function_decl)
@@ -129,6 +143,7 @@ struct ClassDecl
     bool is_generic_instantiation = false;
     std::string generic_group_name;
     std::vector<std::string> csharp_attributes;
+    std::string csharp_comment;
     std::vector<FunctionDecl> methods;
     std::vector<PropertyDecl> properties;
 };
@@ -154,6 +169,8 @@ struct ModuleDecl
 {
     std::string name;
     std::string csharp_api_class;
+    std::string csharp_namespace;
+    std::function<std::string(CSharpNameKind, std::string_view)> csharp_name_formatter;
     std::string pinvoke_library;
     std::vector<std::string> cabi_includes;
     std::vector<FunctionDecl> functions;

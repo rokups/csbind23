@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <format>
 #include <initializer_list>
 #include <string>
@@ -63,6 +64,11 @@ struct Flags
 };
 
 struct Attribute
+{
+    std::string_view value;
+};
+
+struct Comment
 {
     std::string_view value;
 };
@@ -235,6 +241,18 @@ public:
         return *this;
     }
 
+    ModuleBuilder& csharp_namespace(std::string_view namespace_name)
+    {
+        module_decl_->csharp_namespace = std::string(namespace_name);
+        return *this;
+    }
+
+    ModuleBuilder& csharp_name_formatter(std::function<std::string(CSharpNameKind, std::string_view)> formatter)
+    {
+        module_decl_->csharp_name_formatter = std::move(formatter);
+        return *this;
+    }
+
     ModuleBuilder& cabi_include(std::string_view include_path)
     {
         module_decl_->cabi_includes.push_back(std::string(include_path));
@@ -262,7 +280,7 @@ public:
             ? std::string(detail::function_symbol_name<Function>())
             : std::string(def_options.cpp_symbol);
         return def_impl(name, Function, def_options.return_ownership, def_options.trailing_default_argument_count,
-            cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+            cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment, def_options.arg_options);
     }
 
     template <typename ReturnType, typename... Args, typename... Options>
@@ -270,7 +288,7 @@ public:
     {
         const auto def_options = make_function_def_options(std::forward<Options>(options)...);
         return def_impl(name, function_ptr, def_options.return_ownership, def_options.trailing_default_argument_count,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment, def_options.arg_options);
     }
 
     template <auto FirstFunction, auto... RestFunctions> ModuleBuilder& def_generic()
@@ -292,7 +310,8 @@ public:
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def_impl(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
         std::size_t trailing_default_argument_count, std::string_view cpp_symbol,
-        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {},
+        std::vector<std::string> csharp_attributes = {}, std::string csharp_comment = {},
+        std::vector<Arg> arg_options = {},
         std::string_view exported_name = {})
     {
         (void)function_ptr;
@@ -306,6 +325,7 @@ public:
         function_decl.trailing_default_argument_count =
             trailing_default_argument_count > sizeof...(Args) ? sizeof...(Args) : trailing_default_argument_count;
         function_decl.csharp_attributes = std::move(csharp_attributes);
+        function_decl.csharp_comment = std::move(csharp_comment);
 
         function_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
@@ -357,7 +377,7 @@ private:
 
         def_impl(managed_name, Function, def_options.return_ownership,
             def_options.trailing_default_argument_count, cpp_symbol, def_options.csharp_attributes,
-            def_options.arg_options, export_name);
+            def_options.csharp_comment, def_options.arg_options, export_name);
 
         FunctionDecl& inserted = module_decl_->functions.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -371,6 +391,7 @@ private:
         std::string_view cpp_symbol = {};
         std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
+        std::string csharp_comment;
         std::vector<Arg> arg_options;
     };
 
@@ -378,6 +399,7 @@ private:
     {
         std::string_view cpp_name = {};
         std::vector<std::string> csharp_attributes;
+        std::string csharp_comment;
     };
 
     struct EnumOptions
@@ -423,6 +445,11 @@ private:
         options.csharp_attributes.push_back(std::string(attribute.value));
     }
 
+    static void apply_function_def_option(FunctionDefOptions& options, Comment comment)
+    {
+        options.csharp_comment = std::string(comment.value);
+    }
+
     static void apply_function_def_option(FunctionDefOptions& options, Arg arg_option)
     {
         options.arg_options.push_back(arg_option);
@@ -431,7 +458,7 @@ private:
     template <typename Option> static void apply_function_def_option(FunctionDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, CppSymbols, Attribute, Arg.");
+            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
     }
 
     template <typename... Options> static ClassOptions make_class_options(Options&&... options)
@@ -451,10 +478,15 @@ private:
         options.csharp_attributes.push_back(std::string(attribute.value));
     }
 
+    static void apply_class_option(ClassOptions& options, Comment comment)
+    {
+        options.csharp_comment = std::string(comment.value);
+    }
+
     template <typename Option> static void apply_class_option(ClassOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ModuleBuilder::class_ option. Supported tags: CppName, Attribute.");
+            "Unsupported ModuleBuilder::class_ option. Supported tags: CppName, Attribute, Comment.");
     }
 
     template <typename... Options> static EnumOptions make_enum_options(Options&&... options)
@@ -497,6 +529,25 @@ public:
     ClassBuilder& enable_virtual_overrides(bool enabled = true)
     {
         class_decl_->enable_virtual_overrides = enabled;
+        return *this;
+    }
+
+    ClassBuilder& comment(std::string_view comment_text)
+    {
+        class_decl_->csharp_comment = std::string(comment_text);
+        return *this;
+    }
+
+    ClassBuilder& property_comment(std::string_view property_name, std::string_view comment_text)
+    {
+        for (auto& property_decl : class_decl_->properties)
+        {
+            if (property_decl.name == property_name)
+            {
+                property_decl.csharp_comment = std::string(comment_text);
+                break;
+            }
+        }
         return *this;
     }
 
@@ -550,7 +601,8 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.arg_options);
         return *this;
     }
 
@@ -566,7 +618,8 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.arg_options);
         return *this;
     }
 
@@ -607,19 +660,20 @@ public:
         property_decl.name = std::string(name);
         property_decl.type = owner_->make_bound_type_ref<BareFieldType>();
         property_decl.has_getter = true;
+        property_decl.is_field_projection = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
         const std::string field_symbol = detail::unqualified_name(detail::function_symbol_name<FieldPtr>());
 
         add_method<ClassType, BareFieldType>(property_decl.getter_name, true, Ownership::Auto, 0, false,
-            true, false, field_symbol, {}, {}, true);
+            true, false, field_symbol, {}, {}, {}, true);
 
         if constexpr (!std::is_const_v<FieldType>)
         {
             property_decl.has_setter = true;
             property_decl.setter_name = std::string("__csbind23_propset_") + std::string(name);
             add_method<ClassType, void, BareFieldType>(property_decl.setter_name, false, Ownership::Auto, 0,
-                false, false, true, field_symbol, {}, {}, true);
+                false, false, true, field_symbol, {}, {}, {}, true);
         }
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -781,6 +835,7 @@ private:
         std::string_view cpp_symbol = {};
         std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
+        std::string csharp_comment;
         std::vector<Arg> arg_options;
     };
 
@@ -825,6 +880,11 @@ private:
         options.csharp_attributes.push_back(std::string(attribute.value));
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, Comment comment)
+    {
+        options.csharp_comment = std::string(comment.value);
+    }
+
     static void apply_method_def_option(MethodDefOptions& options, Arg arg_option)
     {
         options.arg_options.push_back(arg_option);
@@ -833,14 +893,15 @@ private:
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, CppSymbols, Attribute, Arg.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_method(std::string_view name, bool is_const, Ownership return_ownership,
         std::size_t trailing_default_argument_count = 0, bool allow_override = false,
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
-        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {},
+        std::vector<std::string> csharp_attributes = {}, std::string csharp_comment = {},
+        std::vector<Arg> arg_options = {},
         bool is_field_accessor = false)
     {
         FunctionDecl method_decl;
@@ -860,6 +921,7 @@ private:
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
         method_decl.csharp_attributes = std::move(csharp_attributes);
+        method_decl.csharp_comment = std::move(csharp_comment);
 
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
@@ -991,7 +1053,8 @@ private:
 
         add_method<ClassType, ReturnType, Args...>(managed_name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            cpp_symbol_override, def_options.csharp_attributes, def_options.arg_options);
+            cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.arg_options);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -1014,7 +1077,8 @@ private:
 
         add_method<ClassType, ReturnType, Args...>(managed_name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            cpp_symbol_override, def_options.csharp_attributes, def_options.arg_options);
+            cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.arg_options);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
@@ -1124,6 +1188,7 @@ ClassBuilder ModuleBuilder::class_(std::string_view name, Options&&... options)
     class_decl.cpp_name = class_options.cpp_name.empty() ? detail::qualified_type_name<ClassType>()
                                                           : std::string(class_options.cpp_name);
     class_decl.csharp_attributes = class_options.csharp_attributes;
+    class_decl.csharp_comment = class_options.csharp_comment;
     auto add_base = [&class_decl]<typename BaseType>() {
         class_decl.base_classes.push_back(
             ClassDecl::BaseClassDecl{detail::unqualified_type_name<BaseType>(), detail::qualified_type_name<BaseType>()});
