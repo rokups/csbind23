@@ -33,6 +33,20 @@ struct CppSymbol
     std::string_view value;
 };
 
+struct CppName
+{
+    std::string_view value;
+};
+
+struct Flags
+{
+};
+
+struct Attribute
+{
+    std::string_view value;
+};
+
 class BindingsGenerator
 {
 public:
@@ -163,7 +177,7 @@ public:
             ? std::string(detail::function_symbol_name<Function>())
             : std::string(def_options.cpp_symbol);
         return def_impl(name, Function, def_options.return_ownership, def_options.trailing_default_argument_count,
-            cpp_symbol);
+            cpp_symbol, def_options.csharp_attributes);
     }
 
     template <typename ReturnType, typename... Args, typename... Options>
@@ -171,12 +185,13 @@ public:
     {
         const auto def_options = make_function_def_options(std::forward<Options>(options)...);
         return def_impl(name, function_ptr, def_options.return_ownership, def_options.trailing_default_argument_count,
-            def_options.cpp_symbol);
+            def_options.cpp_symbol, def_options.csharp_attributes);
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def_impl(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
-        std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
+        std::size_t trailing_default_argument_count, std::string_view cpp_symbol,
+        std::vector<std::string> csharp_attributes = {})
     {
         (void)function_ptr;
 
@@ -187,6 +202,7 @@ public:
         function_decl.return_ownership = return_ownership;
         function_decl.trailing_default_argument_count =
             trailing_default_argument_count > sizeof...(Args) ? sizeof...(Args) : trailing_default_argument_count;
+        function_decl.csharp_attributes = std::move(csharp_attributes);
 
         function_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
@@ -199,12 +215,16 @@ public:
     }
 
     template <typename ClassType, typename... BaseTypes>
-    ClassBuilder class_(std::string_view name = detail::unqualified_type_name<ClassType>(),
-        std::string_view cpp_name = detail::qualified_type_name<ClassType>());
+    ClassBuilder class_();
+
+    template <typename ClassType, typename... BaseTypes, typename... Options>
+    ClassBuilder class_(std::string_view name, Options&&... options);
 
     template <typename EnumType>
-    EnumBuilder enum_(std::string_view name = detail::unqualified_type_name<EnumType>(),
-        std::string_view cpp_name = detail::qualified_type_name<EnumType>());
+    EnumBuilder enum_();
+
+    template <typename EnumType, typename... Options>
+    EnumBuilder enum_(std::string_view name, Options&&... options);
 
 private:
     struct FunctionDefOptions
@@ -212,6 +232,20 @@ private:
         Ownership return_ownership = Ownership::Auto;
         std::size_t trailing_default_argument_count = 0;
         std::string_view cpp_symbol = {};
+        std::vector<std::string> csharp_attributes;
+    };
+
+    struct ClassOptions
+    {
+        std::string_view cpp_name = {};
+        std::vector<std::string> csharp_attributes;
+    };
+
+    struct EnumOptions
+    {
+        std::string_view cpp_name = {};
+        bool is_flags = false;
+        std::vector<std::string> csharp_attributes;
     };
 
     template <typename Option> struct dependent_false : std::false_type
@@ -240,10 +274,66 @@ private:
         options.cpp_symbol = cpp_symbol.value;
     }
 
+    static void apply_function_def_option(FunctionDefOptions& options, Attribute attribute)
+    {
+        options.csharp_attributes.push_back(std::string(attribute.value));
+    }
+
     template <typename Option> static void apply_function_def_option(FunctionDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol.");
+            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, Attribute.");
+    }
+
+    template <typename... Options> static ClassOptions make_class_options(Options&&... options)
+    {
+        ClassOptions parsed_options;
+        (apply_class_option(parsed_options, std::forward<Options>(options)), ...);
+        return parsed_options;
+    }
+
+    static void apply_class_option(ClassOptions& options, CppName cpp_name)
+    {
+        options.cpp_name = cpp_name.value;
+    }
+
+    static void apply_class_option(ClassOptions& options, Attribute attribute)
+    {
+        options.csharp_attributes.push_back(std::string(attribute.value));
+    }
+
+    template <typename Option> static void apply_class_option(ClassOptions&, Option&&)
+    {
+        static_assert(dependent_false<std::decay_t<Option>>::value,
+            "Unsupported ModuleBuilder::class_ option. Supported tags: CppName, Attribute.");
+    }
+
+    template <typename... Options> static EnumOptions make_enum_options(Options&&... options)
+    {
+        EnumOptions parsed_options;
+        (apply_enum_option(parsed_options, std::forward<Options>(options)), ...);
+        return parsed_options;
+    }
+
+    static void apply_enum_option(EnumOptions& options, CppName cpp_name)
+    {
+        options.cpp_name = cpp_name.value;
+    }
+
+    static void apply_enum_option(EnumOptions& options, Flags)
+    {
+        options.is_flags = true;
+    }
+
+    static void apply_enum_option(EnumOptions& options, Attribute attribute)
+    {
+        options.csharp_attributes.push_back(std::string(attribute.value));
+    }
+
+    template <typename Option> static void apply_enum_option(EnumOptions&, Option&&)
+    {
+        static_assert(dependent_false<std::decay_t<Option>>::value,
+            "Unsupported ModuleBuilder::enum_ option. Supported tags: CppName, Flags, Attribute.");
     }
 
     BindingsGenerator* owner_;
@@ -311,7 +401,7 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol);
+            def_options.cpp_symbol, def_options.csharp_attributes);
         return *this;
     }
 
@@ -327,7 +417,7 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol);
+            def_options.cpp_symbol, def_options.csharp_attributes);
         return *this;
     }
 
@@ -489,6 +579,7 @@ private:
         std::size_t trailing_default_argument_count = 0;
         bool allow_override = false;
         std::string_view cpp_symbol = {};
+        std::vector<std::string> csharp_attributes;
     };
 
     template <typename Option> struct dependent_false : std::false_type
@@ -522,16 +613,22 @@ private:
         options.cpp_symbol = cpp_symbol.value;
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, Attribute attribute)
+    {
+        options.csharp_attributes.push_back(std::string(attribute.value));
+    }
+
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, Attribute.");
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_method(std::string_view name, bool is_const, Ownership return_ownership,
         std::size_t trailing_default_argument_count = 0, bool allow_override = false,
-        bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {})
+        bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
+        std::vector<std::string> csharp_attributes = {})
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
@@ -547,6 +644,7 @@ private:
         method_decl.is_property_setter = is_property_setter;
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
+        method_decl.csharp_attributes = std::move(csharp_attributes);
 
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
@@ -589,11 +687,22 @@ private:
 };
 
 template <typename ClassType, typename... BaseTypes>
-ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_name)
+ClassBuilder ModuleBuilder::class_()
 {
+    return class_<ClassType, BaseTypes...>(
+        detail::unqualified_type_name<ClassType>(), CppName{detail::qualified_type_name<ClassType>()});
+}
+
+template <typename ClassType, typename... BaseTypes, typename... Options>
+ClassBuilder ModuleBuilder::class_(std::string_view name, Options&&... options)
+{
+    const auto class_options = make_class_options(std::forward<Options>(options)...);
+
     ClassDecl class_decl;
     class_decl.name = std::string(name);
-    class_decl.cpp_name = std::string(cpp_name);
+    class_decl.cpp_name = class_options.cpp_name.empty() ? detail::qualified_type_name<ClassType>()
+                                                          : std::string(class_options.cpp_name);
+    class_decl.csharp_attributes = class_options.csharp_attributes;
     auto add_base = [&class_decl]<typename BaseType>() {
         class_decl.base_classes.push_back(
             ClassDecl::BaseClassDecl{detail::unqualified_type_name<BaseType>(), detail::qualified_type_name<BaseType>()});
@@ -610,15 +719,26 @@ ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_n
 }
 
 template <typename EnumType>
-EnumBuilder ModuleBuilder::enum_(std::string_view name, std::string_view cpp_name)
+EnumBuilder ModuleBuilder::enum_()
+{
+    return enum_<EnumType>(detail::unqualified_type_name<EnumType>(), CppName{detail::qualified_type_name<EnumType>()});
+}
+
+template <typename EnumType, typename... Options>
+EnumBuilder ModuleBuilder::enum_(std::string_view name, Options&&... options)
 {
     static_assert(std::is_enum_v<EnumType>, "ModuleBuilder::enum_ expects an enum type");
+
+    const auto enum_options = make_enum_options(std::forward<Options>(options)...);
 
     using Underlying = std::underlying_type_t<EnumType>;
     EnumDecl enum_decl;
     enum_decl.name = std::string(name);
-    enum_decl.cpp_name = std::string(cpp_name);
+    enum_decl.cpp_name = enum_options.cpp_name.empty() ? detail::qualified_type_name<EnumType>()
+                                                        : std::string(enum_options.cpp_name);
     enum_decl.underlying_type = owner_->make_bound_type_ref<Underlying>();
+    enum_decl.is_flags = enum_options.is_flags;
+    enum_decl.csharp_attributes = enum_options.csharp_attributes;
     module_decl_->enums.push_back(std::move(enum_decl));
     return EnumBuilder(*owner_, module_decl_->enums.back());
 }

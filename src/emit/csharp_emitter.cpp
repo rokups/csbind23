@@ -1,11 +1,14 @@
 #include "csbind23/emit/csharp_emitter.hpp"
 
+#include "csbind23/cabi/converter.hpp"
 #include "csbind23/text_writer.hpp"
 
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <cstdint>
+#include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <limits>
@@ -24,6 +27,129 @@ std::filesystem::path write_csharp_file(
     std::ofstream output(output_path, std::ios::binary);
     output.write(content.data(), static_cast<std::streamsize>(content.size()));
     return output_path;
+}
+
+bool is_any_of(std::string_view value, std::initializer_list<std::string_view> candidates)
+{
+    for (const auto candidate : candidates)
+    {
+        if (value == candidate)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_csharp_enum_integral_underlying(std::string_view type_name)
+{
+    return is_any_of(type_name, {"byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong"});
+}
+
+bool is_csharp_builtin_value_type(std::string_view type_name)
+{
+    return is_any_of(type_name,
+        {"bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong", "nint", "nuint",
+            "float", "double", "char"});
+}
+
+bool is_pinvoke_pointer_sized_integral(std::string_view type_name)
+{
+    return is_any_of(type_name, {"nint", "nuint"});
+}
+
+bool is_unsigned_long_family(std::string_view type_name)
+{
+    return is_any_of(type_name, {"unsigned long", "unsigned long long"});
+}
+
+bool is_signed_long_family(std::string_view type_name)
+{
+    return is_any_of(type_name, {"long", "long long"});
+}
+
+bool is_cabi_void(std::string_view c_abi_name)
+{
+    return c_abi_name == "void";
+}
+
+bool is_pinvoke_int_ptr(std::string_view pinvoke_name)
+{
+    return pinvoke_name == "System.IntPtr";
+}
+
+bool is_cpp_std_string(std::string_view cpp_name)
+{
+    return cpp_name == "std::string";
+}
+
+std::optional<std::string_view> pinvoke_integral_type_from_cabi(std::string_view c_abi_name)
+{
+    using csbind23::cabi::Converter;
+
+    if (c_abi_name == Converter<signed char>::c_abi_type_name())
+    {
+        return Converter<signed char>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<unsigned char>::c_abi_type_name() || c_abi_name == Converter<char>::c_abi_type_name())
+    {
+        return Converter<unsigned char>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<short>::c_abi_type_name())
+    {
+        return Converter<short>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<unsigned short>::c_abi_type_name())
+    {
+        return Converter<unsigned short>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<int>::c_abi_type_name())
+    {
+        return Converter<int>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<unsigned int>::c_abi_type_name())
+    {
+        return Converter<unsigned int>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<long>::c_abi_type_name())
+    {
+        return Converter<long>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<unsigned long>::c_abi_type_name())
+    {
+        return Converter<unsigned long>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<long long>::c_abi_type_name())
+    {
+        return Converter<long long>::pinvoke_type_name();
+    }
+    if (c_abi_name == Converter<unsigned long long>::c_abi_type_name())
+    {
+        return Converter<unsigned long long>::pinvoke_type_name();
+    }
+
+    return std::nullopt;
+}
+
+std::string normalize_enum_underlying_integral(
+    std::string_view pinvoke_name, std::string_view cpp_name, std::string_view c_abi_name)
+{
+    if (!is_pinvoke_pointer_sized_integral(pinvoke_name))
+    {
+        return std::string(pinvoke_name);
+    }
+
+    if (is_unsigned_long_family(cpp_name) || is_unsigned_long_family(c_abi_name))
+    {
+        return "ulong";
+    }
+
+    if (is_signed_long_family(cpp_name) || is_signed_long_family(c_abi_name))
+    {
+        return "long";
+    }
+
+    return "long";
 }
 
 bool module_uses_pinvoke_type(const ModuleDecl& module_decl, std::string_view pinvoke_type)
@@ -142,13 +268,13 @@ bool parameter_is_ref(const ParameterDecl& parameter)
         return true;
     }
 
-    if (parameter.type.is_pointer && !parameter.type.is_const && parameter.type.pinvoke_name != "System.IntPtr")
+    if (parameter.type.is_pointer && !parameter.type.is_const && !is_pinvoke_int_ptr(parameter.type.pinvoke_name))
     {
         return true;
     }
 
     if (parameter.type.has_managed_converter() && parameter.type.is_pointer && !parameter.type.is_const
-        && parameter.type.cpp_name == "std::string")
+        && is_cpp_std_string(parameter.type.cpp_name))
     {
         return true;
     }
@@ -325,7 +451,7 @@ const ClassDecl* find_pointer_class_return(const ModuleDecl& module_decl, const 
 
 std::string wrapper_return_type(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
 {
-    if (function_decl.return_type.c_abi_name == "void")
+    if (is_cabi_void(function_decl.return_type.c_abi_name))
     {
         return "void";
     }
@@ -559,13 +685,54 @@ std::string csharp_api_class_name(const ModuleDecl& module_decl)
 std::string csharp_enum_underlying_type(const EnumDecl& enum_decl)
 {
     const auto& type_name = enum_decl.underlying_type.pinvoke_name;
-    if (type_name == "byte" || type_name == "sbyte" || type_name == "short" || type_name == "ushort"
-        || type_name == "int" || type_name == "uint" || type_name == "long" || type_name == "ulong")
+    if (is_csharp_enum_integral_underlying(type_name))
     {
         return type_name;
     }
 
+    const auto& cpp_name = enum_decl.underlying_type.cpp_name;
+    const auto& c_abi_name = enum_decl.underlying_type.c_abi_name;
+
+    if (is_pinvoke_pointer_sized_integral(type_name))
+    {
+        return normalize_enum_underlying_integral(type_name, cpp_name, c_abi_name);
+    }
+
+    if (const auto mapped = pinvoke_integral_type_from_cabi(c_abi_name); mapped.has_value())
+    {
+        return normalize_enum_underlying_integral(*mapped, cpp_name, c_abi_name);
+    }
+
     return "int";
+}
+
+std::string normalize_csharp_attribute(std::string_view attribute)
+{
+    const std::size_t first = attribute.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos)
+    {
+        return {};
+    }
+    const std::size_t last = attribute.find_last_not_of(" \t\r\n");
+    const std::string_view trimmed = attribute.substr(first, last - first + 1);
+    if (!trimmed.empty() && trimmed.front() == '[' && trimmed.back() == ']')
+    {
+        return std::string(trimmed);
+    }
+    return std::format("[{}]", trimmed);
+}
+
+void append_csharp_attributes(
+    TextWriter& output, std::string_view indent, const std::vector<std::string>& csharp_attributes)
+{
+    for (const auto& attribute : csharp_attributes)
+    {
+        const std::string rendered = normalize_csharp_attribute(attribute);
+        if (!rendered.empty())
+        {
+            output.append_line_format("{}{}", indent, rendered);
+        }
+    }
 }
 
 std::string csharp_enum_value_literal(const EnumDecl& enum_decl, const EnumValueDecl& value_decl)
@@ -597,10 +764,7 @@ std::string parameter_list_without_self(const FunctionDecl& function_decl)
 
 bool csharp_type_is_value_type(const ModuleDecl& module_decl, std::string_view type_name)
 {
-    if (type_name == "bool" || type_name == "byte" || type_name == "sbyte" || type_name == "short"
-        || type_name == "ushort" || type_name == "int" || type_name == "uint" || type_name == "long"
-        || type_name == "ulong" || type_name == "nint" || type_name == "nuint" || type_name == "float"
-        || type_name == "double" || type_name == "char")
+    if (is_csharp_builtin_value_type(type_name))
     {
         return true;
     }
@@ -909,6 +1073,8 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     const std::string native_name = std::format("{}_{}_{}", module_name, class_decl.name, method_decl.name);
     const std::string base_native_name = native_name + "__base";
     const std::string return_type = wrapper_return_type(module_decl, method_decl);
+
+    append_csharp_attributes(output, "    ", method_decl.csharp_attributes);
 
     if (method_decl.is_property_getter || method_decl.is_property_setter)
     {
@@ -1274,7 +1440,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         output.append_line("    {");
         output.append_line_format("        if (!__csbind23_TryGetInstance(self, out var instance))");
         output.append_line("        {");
-        if (method_decl.return_type.c_abi_name != "void")
+        if (!is_cabi_void(method_decl.return_type.c_abi_name))
         {
             output.append_line("            return default!;");
         }
@@ -1301,7 +1467,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
         output.append_line_format("        if (!{})", virtual_mask_test_expression("instance.", index));
         output.append_line("        {");
-        if (method_decl.return_type.c_abi_name == "void")
+        if (is_cabi_void(method_decl.return_type.c_abi_name))
         {
             output.append_line_format("            {} ;", base_native_call);
             output.append_line("            return;");
@@ -1344,7 +1510,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
         const std::string invoke_args = join_arguments(managed_args);
 
-        if (method_decl.return_type.c_abi_name == "void")
+        if (is_cabi_void(method_decl.return_type.c_abi_name))
         {
             output.append_line_format("        instance.{}({});", method_decl.name, invoke_args);
             output.append_line("        return;");
@@ -1411,6 +1577,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         ? "public partial class"
         : (is_primary_base_for_any_class(module_decl, class_decl) ? "public class" : "public sealed class");
 
+    append_csharp_attributes(output, "", class_decl.csharp_attributes);
     output.append_line_format("{} {} : {}", class_declaration, class_decl.name, base_clause);
     output.append_line("{");
     if (!has_base_class)
@@ -1791,6 +1958,11 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& enum_decl : module_decl.enums)
     {
+        if (enum_decl.is_flags)
+        {
+            generated.append_line("[System.Flags]");
+        }
+        append_csharp_attributes(generated, "", enum_decl.csharp_attributes);
         generated.append_line_format("public enum {} : {}", enum_decl.name, csharp_enum_underlying_type(enum_decl));
         generated.append_line("{");
         for (const auto& enum_value : enum_decl.values)
@@ -1876,6 +2048,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& function_decl : module_decl.functions)
     {
+        append_csharp_attributes(generated, "    ", function_decl.csharp_attributes);
         const std::string params = free_function_parameter_list(module_decl, function_decl);
         const std::string return_type = wrapper_return_type(module_decl, function_decl);
         const std::string native_name = module_decl.name + "_" + function_decl.name;

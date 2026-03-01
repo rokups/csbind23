@@ -63,6 +63,7 @@ struct FunctionDecl
     bool is_property_setter = false;
     std::string class_name;
     std::string virtual_slot_name;
+    std::vector<std::string> csharp_attributes;
 };
 
 struct PropertyDecl
@@ -120,6 +121,7 @@ struct ClassDecl
     std::string base_cpp_name;
     std::vector<BaseClassDecl> base_classes;
     bool enable_virtual_overrides = false;
+    std::vector<std::string> csharp_attributes;
     std::vector<FunctionDecl> methods;
     std::vector<PropertyDecl> properties;
 };
@@ -136,6 +138,8 @@ struct EnumDecl
     std::string name;
     std::string cpp_name;
     TypeRef underlying_type;
+    bool is_flags = false;
+    std::vector<std::string> csharp_attributes;
     std::vector<EnumValueDecl> values;
 };
 
