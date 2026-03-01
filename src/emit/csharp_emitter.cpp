@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -252,6 +253,11 @@ std::string pinvoke_return_type(const FunctionDecl& function_decl)
     return function_decl.return_type.pinvoke_name;
 }
 
+std::string exported_symbol_name(const FunctionDecl& function_decl)
+{
+    return function_decl.exported_name.empty() ? function_decl.name : function_decl.exported_name;
+}
+
 std::string wrapper_type_name(const TypeRef& type_ref)
 {
     if (type_ref.has_managed_converter() && !type_ref.managed_type_name.empty())
@@ -404,6 +410,65 @@ struct EmittedMethod
     FunctionDecl method;
     bool inherited_from_secondary_base = false;
 };
+
+struct GenericFunctionGroup
+{
+    std::string name;
+    std::vector<const FunctionDecl*> instantiations;
+};
+
+std::vector<GenericFunctionGroup> collect_generic_function_groups(const std::vector<FunctionDecl>& functions)
+{
+    std::vector<GenericFunctionGroup> groups;
+    std::unordered_map<std::string, std::size_t> by_name;
+    for (const auto& function_decl : functions)
+    {
+        if (!function_decl.is_generic_instantiation || function_decl.generic_group_name.empty())
+        {
+            continue;
+        }
+
+        const std::string& name = function_decl.generic_group_name;
+        auto it = by_name.find(name);
+        if (it == by_name.end())
+        {
+            by_name.emplace(name, groups.size());
+            groups.push_back(GenericFunctionGroup{name, {&function_decl}});
+        }
+        else
+        {
+            groups[it->second].instantiations.push_back(&function_decl);
+        }
+    }
+    return groups;
+}
+
+std::vector<GenericFunctionGroup> collect_generic_method_groups(const std::vector<EmittedMethod>& methods)
+{
+    std::vector<GenericFunctionGroup> groups;
+    std::unordered_map<std::string, std::size_t> by_name;
+    for (const auto& emitted_method : methods)
+    {
+        const auto& method_decl = emitted_method.method;
+        if (!method_decl.is_generic_instantiation || method_decl.generic_group_name.empty())
+        {
+            continue;
+        }
+
+        const std::string& name = method_decl.generic_group_name;
+        auto it = by_name.find(name);
+        if (it == by_name.end())
+        {
+            by_name.emplace(name, groups.size());
+            groups.push_back(GenericFunctionGroup{name, {&method_decl}});
+        }
+        else
+        {
+            groups[it->second].instantiations.push_back(&method_decl);
+        }
+    }
+    return groups;
+}
 
 std::vector<EmittedMethod> collect_emitted_methods(const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
@@ -921,6 +986,427 @@ std::vector<const FunctionDecl*> collect_virtual_methods(
     return methods;
 }
 
+struct GenericDispatchShape
+{
+    bool supported = false;
+    std::vector<int> generic_parameter_slot_ids;
+    int generic_return_slot_id = -1;
+    std::size_t generic_arity = 0;
+};
+
+bool same_wrapper_type_shape(const TypeRef& lhs, const TypeRef& rhs)
+{
+    return wrapper_type_name(lhs) == wrapper_type_name(rhs)
+        && lhs.is_const == rhs.is_const
+        && lhs.is_pointer == rhs.is_pointer
+        && lhs.is_reference == rhs.is_reference;
+}
+
+std::string generic_type_parameter_name(std::size_t index, std::size_t generic_arity)
+{
+    if (generic_arity == 1)
+    {
+        return "T";
+    }
+
+    return std::format("T{}", index);
+}
+
+std::string generic_type_parameter_list(std::size_t generic_arity)
+{
+    std::string rendered;
+    for (std::size_t index = 0; index < generic_arity; ++index)
+    {
+        if (index > 0)
+        {
+            rendered += ", ";
+        }
+        rendered += generic_type_parameter_name(index, generic_arity);
+    }
+    return rendered;
+}
+
+std::string concrete_type_for_slot(
+    const FunctionDecl& instantiation, const GenericDispatchShape& shape, int slot_id)
+{
+    for (std::size_t index = 0; index < instantiation.parameters.size(); ++index)
+    {
+        if (shape.generic_parameter_slot_ids[index] == slot_id)
+        {
+            return wrapper_type_name(instantiation.parameters[index].type);
+        }
+    }
+
+    if (shape.generic_return_slot_id == slot_id)
+    {
+        return wrapper_type_name(instantiation.return_type);
+    }
+
+    return {};
+}
+
+GenericDispatchShape analyze_generic_dispatch_shape(const GenericFunctionGroup& group)
+{
+    GenericDispatchShape shape;
+    if (group.instantiations.empty())
+    {
+        return shape;
+    }
+
+    const FunctionDecl& first = *group.instantiations.front();
+    const std::size_t parameter_count = first.parameters.size();
+    shape.generic_parameter_slot_ids.assign(parameter_count, -1);
+
+    for (const auto* instantiation : group.instantiations)
+    {
+        if (instantiation->parameters.size() != parameter_count)
+        {
+            return GenericDispatchShape{};
+        }
+    }
+
+    std::vector<bool> varying_parameters(parameter_count, false);
+    for (std::size_t index = 0; index < parameter_count; ++index)
+    {
+        bool all_same = true;
+        const auto& first_parameter = first.parameters[index];
+        for (const auto* instantiation : group.instantiations)
+        {
+            const auto& parameter = instantiation->parameters[index];
+            if (!same_wrapper_type_shape(parameter.type, first_parameter.type))
+            {
+                all_same = false;
+            }
+        }
+
+        if (!all_same)
+        {
+            for (const auto* instantiation : group.instantiations)
+            {
+                const auto& parameter = instantiation->parameters[index];
+                if (parameter_is_ref(parameter) || parameter.type.has_managed_converter())
+                {
+                    return GenericDispatchShape{};
+                }
+            }
+
+            varying_parameters[index] = true;
+        }
+    }
+
+    bool varying_return = false;
+    bool return_all_same = true;
+    for (const auto* instantiation : group.instantiations)
+    {
+        const auto& return_type = instantiation->return_type;
+        if (!same_wrapper_type_shape(return_type, first.return_type))
+        {
+            return_all_same = false;
+        }
+    }
+
+    if (!return_all_same)
+    {
+        for (const auto* instantiation : group.instantiations)
+        {
+            const auto& return_type = instantiation->return_type;
+            if (return_type.is_pointer || return_type.is_reference || return_type.has_managed_converter())
+            {
+                return GenericDispatchShape{};
+            }
+        }
+
+        varying_return = true;
+    }
+
+    bool saw_generic_slot = varying_return;
+    for (const bool varying_parameter : varying_parameters)
+    {
+        saw_generic_slot = saw_generic_slot || varying_parameter;
+    }
+
+    if (!saw_generic_slot)
+    {
+        return GenericDispatchShape{};
+    }
+
+    std::unordered_map<std::string, int> slot_groups;
+    auto assign_slot_group = [&](std::size_t index, bool is_return_slot) {
+        std::string key;
+        for (const auto* instantiation : group.instantiations)
+        {
+            const std::string slot_type = is_return_slot
+                ? wrapper_type_name(instantiation->return_type)
+                : wrapper_type_name(instantiation->parameters[index].type);
+            key += slot_type;
+            key += "|";
+        }
+
+        auto it = slot_groups.find(key);
+        if (it != slot_groups.end())
+        {
+            return it->second;
+        }
+
+        const int group_id = static_cast<int>(slot_groups.size());
+        slot_groups.emplace(std::move(key), group_id);
+        return group_id;
+    };
+
+    for (std::size_t index = 0; index < parameter_count; ++index)
+    {
+        if (!varying_parameters[index])
+        {
+            continue;
+        }
+
+        shape.generic_parameter_slot_ids[index] = assign_slot_group(index, false);
+    }
+
+    if (varying_return)
+    {
+        shape.generic_return_slot_id = assign_slot_group(0, true);
+    }
+
+    shape.generic_arity = slot_groups.size();
+    if (shape.generic_arity == 0)
+    {
+        return GenericDispatchShape{};
+    }
+
+    for (const auto* instantiation : group.instantiations)
+    {
+        for (std::size_t slot = 0; slot < shape.generic_arity; ++slot)
+        {
+            const std::string concrete_type =
+                concrete_type_for_slot(*instantiation, shape, static_cast<int>(slot));
+            if (concrete_type.empty())
+            {
+                return GenericDispatchShape{};
+            }
+        }
+    }
+
+    shape.supported = saw_generic_slot;
+    return shape;
+}
+
+void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& module_decl, const GenericFunctionGroup& group)
+{
+    const auto shape = analyze_generic_dispatch_shape(group);
+    if (!shape.supported)
+    {
+        return;
+    }
+
+    const FunctionDecl& first = *group.instantiations.front();
+    const std::string return_type = shape.generic_return_slot_id >= 0
+        ? generic_type_parameter_name(static_cast<std::size_t>(shape.generic_return_slot_id), shape.generic_arity)
+        : wrapper_return_type(module_decl, first);
+    const std::string generic_parameter_list = generic_type_parameter_list(shape.generic_arity);
+
+    output.append_format("    public static {} {}<{}>(", return_type, group.name, generic_parameter_list);
+    for (std::size_t index = 0; index < first.parameters.size(); ++index)
+    {
+        const auto& parameter = first.parameters[index];
+        const int slot_id = shape.generic_parameter_slot_ids[index];
+        const std::string parameter_type = slot_id >= 0
+            ? generic_type_parameter_name(static_cast<std::size_t>(slot_id), shape.generic_arity)
+            : wrapper_type_name(parameter.type);
+        output.append_format("{}{} {}", parameter_signature_byref_keyword(parameter), parameter_type, parameter.name);
+        if (index + 1 < first.parameters.size())
+        {
+            output.append(", ");
+        }
+    }
+    output.append_line(")");
+    output.append_line("    {");
+
+    for (const auto* instantiation : group.instantiations)
+    {
+        std::string condition;
+        for (std::size_t slot = 0; slot < shape.generic_arity; ++slot)
+        {
+            if (!condition.empty())
+            {
+                condition += " && ";
+            }
+
+            const std::string generic_name = generic_type_parameter_name(slot, shape.generic_arity);
+            const std::string concrete_name =
+                concrete_type_for_slot(*instantiation, shape, static_cast<int>(slot));
+            condition += std::format("typeof({}) == typeof({})", generic_name, concrete_name);
+        }
+
+        output.append_line_format("        if ({})", condition);
+        output.append_line("        {");
+
+        std::vector<std::string> call_arguments;
+        call_arguments.reserve(instantiation->parameters.size());
+        for (std::size_t index = 0; index < instantiation->parameters.size(); ++index)
+        {
+            const auto& parameter = instantiation->parameters[index];
+            const int slot_id = shape.generic_parameter_slot_ids[index];
+            if (slot_id >= 0)
+            {
+                const std::string typed_name = std::format("__csbind23_typed_arg{}", index);
+                const std::string generic_name =
+                    generic_type_parameter_name(static_cast<std::size_t>(slot_id), shape.generic_arity);
+                const std::string concrete_name = wrapper_type_name(parameter.type);
+                output.append_line_format(
+                    "            {} {} = System.Runtime.CompilerServices.Unsafe.As<{}, {}>(ref {});",
+                    concrete_name,
+                    typed_name,
+                    generic_name,
+                    concrete_name,
+                    parameter.name);
+                call_arguments.push_back(typed_name);
+            }
+            else
+            {
+                call_arguments.push_back(parameter_call_argument(parameter));
+            }
+        }
+
+        const std::string call = std::format("{}({})", instantiation->name, join_arguments(call_arguments));
+        if (return_type == "void")
+        {
+            output.append_line_format("            {} ;", call);
+            output.append_line("            return;");
+        }
+        else if (shape.generic_return_slot_id >= 0)
+        {
+            const std::string concrete_name = wrapper_type_name(instantiation->return_type);
+            const std::string generic_name = generic_type_parameter_name(
+                static_cast<std::size_t>(shape.generic_return_slot_id), shape.generic_arity);
+            output.append_line_format("            {} __csbind23_typed_result = {} ;", concrete_name, call);
+            output.append_line_format(
+                "            return System.Runtime.CompilerServices.Unsafe.As<{}, {}>(ref __csbind23_typed_result);",
+                concrete_name,
+                generic_name);
+        }
+        else
+        {
+            output.append_line_format("            return {};", call);
+        }
+        output.append_line("        }");
+    }
+
+    output.append_line_format(
+        "        throw new System.NotSupportedException(\"No generic mapping for {} with provided generic type arguments.\");",
+        group.name);
+    output.append_line("    }");
+    output.append_line();
+}
+
+void append_method_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& module_decl, const GenericFunctionGroup& group)
+{
+    const auto shape = analyze_generic_dispatch_shape(group);
+    if (!shape.supported)
+    {
+        return;
+    }
+
+    const FunctionDecl& first = *group.instantiations.front();
+    const std::string return_type = shape.generic_return_slot_id >= 0
+        ? generic_type_parameter_name(static_cast<std::size_t>(shape.generic_return_slot_id), shape.generic_arity)
+        : wrapper_return_type(module_decl, first);
+    const std::string generic_parameter_list = generic_type_parameter_list(shape.generic_arity);
+
+    output.append_format("    public {} {}<{}>(", return_type, group.name, generic_parameter_list);
+    for (std::size_t index = 0; index < first.parameters.size(); ++index)
+    {
+        const auto& parameter = first.parameters[index];
+        const int slot_id = shape.generic_parameter_slot_ids[index];
+        const std::string parameter_type = slot_id >= 0
+            ? generic_type_parameter_name(static_cast<std::size_t>(slot_id), shape.generic_arity)
+            : wrapper_type_name(parameter.type);
+        output.append_format("{}{} {}", parameter_signature_byref_keyword(parameter), parameter_type, parameter.name);
+        if (index + 1 < first.parameters.size())
+        {
+            output.append(", ");
+        }
+    }
+    output.append_line(")");
+    output.append_line("    {");
+
+    for (const auto* instantiation : group.instantiations)
+    {
+        std::string condition;
+        for (std::size_t slot = 0; slot < shape.generic_arity; ++slot)
+        {
+            if (!condition.empty())
+            {
+                condition += " && ";
+            }
+
+            const std::string generic_name = generic_type_parameter_name(slot, shape.generic_arity);
+            const std::string concrete_name =
+                concrete_type_for_slot(*instantiation, shape, static_cast<int>(slot));
+            condition += std::format("typeof({}) == typeof({})", generic_name, concrete_name);
+        }
+
+        output.append_line_format("        if ({})", condition);
+        output.append_line("        {");
+
+        std::vector<std::string> call_arguments;
+        call_arguments.reserve(instantiation->parameters.size());
+        for (std::size_t index = 0; index < instantiation->parameters.size(); ++index)
+        {
+            const auto& parameter = instantiation->parameters[index];
+            const int slot_id = shape.generic_parameter_slot_ids[index];
+            if (slot_id >= 0)
+            {
+                const std::string typed_name = std::format("__csbind23_typed_arg{}", index);
+                const std::string generic_name =
+                    generic_type_parameter_name(static_cast<std::size_t>(slot_id), shape.generic_arity);
+                const std::string concrete_name = wrapper_type_name(parameter.type);
+                output.append_line_format(
+                    "            {} {} = System.Runtime.CompilerServices.Unsafe.As<{}, {}>(ref {});",
+                    concrete_name,
+                    typed_name,
+                    generic_name,
+                    concrete_name,
+                    parameter.name);
+                call_arguments.push_back(typed_name);
+            }
+            else
+            {
+                call_arguments.push_back(parameter_call_argument(parameter));
+            }
+        }
+
+        const std::string call = std::format("{}({})", instantiation->name, join_arguments(call_arguments));
+        if (return_type == "void")
+        {
+            output.append_line_format("            {} ;", call);
+            output.append_line("            return;");
+        }
+        else if (shape.generic_return_slot_id >= 0)
+        {
+            const std::string concrete_name = wrapper_type_name(instantiation->return_type);
+            const std::string generic_name = generic_type_parameter_name(
+                static_cast<std::size_t>(shape.generic_return_slot_id), shape.generic_arity);
+            output.append_line_format("            {} __csbind23_typed_result = {} ;", concrete_name, call);
+            output.append_line_format(
+                "            return System.Runtime.CompilerServices.Unsafe.As<{}, {}>(ref __csbind23_typed_result);",
+                concrete_name,
+                generic_name);
+        }
+        else
+        {
+            output.append_line_format("            return {};", call);
+        }
+        output.append_line("        }");
+    }
+
+    output.append_line_format(
+        "        throw new System.NotSupportedException(\"No generic mapping for {} with provided generic type arguments.\");",
+        group.name);
+    output.append_line("    }");
+    output.append_line();
+}
+
 std::string interface_name_for_class(const ClassDecl& class_decl)
 {
     return "I" + class_decl.name;
@@ -1086,13 +1572,18 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     const FunctionDecl& method_decl, bool is_virtual, bool is_override, std::size_t virtual_index)
 {
     const std::string parameter_list = parameter_list_without_self(method_decl);
-    const std::string native_name = std::format("{}_{}_{}", module_name, class_decl.name, method_decl.name);
+    const std::string native_name =
+        std::format("{}_{}_{}", module_name, class_decl.name, exported_symbol_name(method_decl));
     const std::string base_native_name = native_name + "__base";
     const std::string return_type = wrapper_return_type(module_decl, method_decl);
 
     append_csharp_attributes(output, "    ", method_decl.csharp_attributes);
 
-    if (method_decl.is_property_getter || method_decl.is_property_setter)
+    if (method_decl.is_generic_instantiation)
+    {
+        output.append_format("    private {} {}(", return_type, method_decl.name);
+    }
+    else if (method_decl.is_property_getter || method_decl.is_property_setter)
     {
         output.append_format("    private {} {}(", return_type, method_decl.name);
     }
@@ -1817,6 +2308,12 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             virtual_index);
     }
 
+    const auto generic_method_groups = collect_generic_method_groups(emitted_methods);
+    for (const auto& group : generic_method_groups)
+    {
+        append_method_generic_dispatch_wrapper(output, module_decl, group);
+    }
+
     for (const auto& property_decl : class_decl.properties)
     {
         const FunctionDecl* getter_decl = nullptr;
@@ -1892,7 +2389,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     for (const auto& function_decl : module_decl.functions)
     {
         append_native_signature(generated, function_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + function_decl.name, false);
+            module_decl.name + "_" + exported_symbol_name(function_decl), false);
 
         const std::size_t defaults = free_function_default_count(module_decl, function_decl);
         for (std::size_t omitted = 1; omitted <= defaults; ++omitted)
@@ -1901,7 +2398,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 generated,
                 function_decl,
                 module_decl.pinvoke_library,
-                module_decl.name + "_" + function_decl.name + std::format("__default_{}", omitted),
+                module_decl.name + "_" + exported_symbol_name(function_decl) + std::format("__default_{}", omitted),
                 false,
                 function_decl.parameters.size() - omitted);
         }
@@ -1959,12 +2456,12 @@ std::vector<std::filesystem::path> emit_csharp_module(
         {
             const auto& method_decl = emitted_method.method;
             append_native_signature(generated, method_decl, module_decl.pinvoke_library,
-                module_decl.name + "_" + class_decl.name + "_" + method_decl.name, true);
+                module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl), true);
 
             if (!virtual_methods.empty() && method_decl.allow_override)
             {
                 append_native_signature(generated, method_decl, module_decl.pinvoke_library,
-                    module_decl.name + "_" + class_decl.name + "_" + method_decl.name + "__base", true);
+                    module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl) + "__base", true);
             }
         }
     }
@@ -2067,11 +2564,12 @@ std::vector<std::filesystem::path> emit_csharp_module(
         append_csharp_attributes(generated, "    ", function_decl.csharp_attributes);
         const std::string params = free_function_parameter_list(module_decl, function_decl);
         const std::string return_type = wrapper_return_type(module_decl, function_decl);
-        const std::string native_name = module_decl.name + "_" + function_decl.name;
+        const std::string native_name = module_decl.name + "_" + exported_symbol_name(function_decl);
         const std::size_t defaults = free_function_default_count(module_decl, function_decl);
         const std::size_t optional_start = function_decl.parameters.size() - defaults;
+        const std::string method_visibility = function_decl.is_generic_instantiation ? "private" : "public";
 
-        generated.append_format("    public static {} {}(", return_type, function_decl.name);
+        generated.append_format("    {} static {} {}(", method_visibility, return_type, function_decl.name);
         generated.append(params);
         generated.append_line(")");
         generated.append_line("    {");
@@ -2321,6 +2819,12 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         generated.append_line("    }");
         generated.append_line();
+    }
+
+    const auto generic_function_groups = collect_generic_function_groups(module_decl.functions);
+    for (const auto& group : generic_function_groups)
+    {
+        append_free_generic_dispatch_wrapper(generated, module_decl, group);
     }
     generated.append_line("}");
     generated.append_line();

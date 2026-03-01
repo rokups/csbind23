@@ -90,6 +90,50 @@ public class BasicTests
 	}
 
 	[Fact]
+	public void GenericMethod_Dispatches_Int32()
+	{
+		const int value = 321;
+		Assert.Equal(value, BasicApi.get_and_return_generic<int>(value));
+	}
+
+	[Fact]
+	public void GenericMethod_Dispatches_Double()
+	{
+		const double value = 8.5;
+		Assert.Equal(value, BasicApi.get_and_return_generic<double>(value));
+	}
+
+	[Fact]
+	public void GenericMethod_Throws_ForUnmappedType()
+	{
+		var ex = Assert.Throws<NotSupportedException>(() => BasicApi.get_and_return_generic<float>(1.0f));
+		Assert.Contains("get_and_return_generic", ex.Message);
+	}
+
+	[Fact]
+	public void GenericMethod_TwoTypeParameters_Dispatches_IntDouble()
+	{
+		const int value = 10;
+		const double delta = 2.75;
+		Assert.Equal(12, BasicApi.add_casted_generic<int, double>(value, delta));
+	}
+
+	[Fact]
+	public void GenericMethod_TwoTypeParameters_Dispatches_DoubleInt()
+	{
+		const double value = 10.5;
+		const int delta = 2;
+		Assert.Equal(12.5, BasicApi.add_casted_generic<double, int>(value, delta));
+	}
+
+	[Fact]
+	public void GenericMethod_TwoTypeParameters_Throws_ForUnmappedCombination()
+	{
+		var ex = Assert.Throws<NotSupportedException>(() => BasicApi.add_casted_generic<int, int>(1, 2));
+		Assert.Contains("add_casted_generic", ex.Message);
+	}
+
+	[Fact]
 	public void Int32_RefParameter_MutatesManagedValue()
 	{
 		var value = 10;

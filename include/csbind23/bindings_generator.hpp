@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -218,15 +219,31 @@ public:
             def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
     }
 
+    template <auto FirstFunction, auto... RestFunctions> ModuleBuilder& def_generic()
+    {
+        return def_generic<FirstFunction, RestFunctions...>(detail::function_export_name<FirstFunction>());
+    }
+
+    template <auto FirstFunction, auto... RestFunctions, typename... Options>
+    ModuleBuilder& def_generic(std::string_view name, Options&&... options)
+    {
+        const auto def_options = make_function_def_options(std::forward<Options>(options)...);
+        add_generic_instantiation<FirstFunction>(name, def_options);
+        (add_generic_instantiation<RestFunctions>(name, def_options), ...);
+        return *this;
+    }
+
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def_impl(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
         std::size_t trailing_default_argument_count, std::string_view cpp_symbol,
-        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {})
+        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {},
+        std::string_view exported_name = {})
     {
         (void)function_ptr;
 
         FunctionDecl function_decl;
         function_decl.name = std::string(name);
+        function_decl.exported_name = exported_name.empty() ? std::string(name) : std::string(exported_name);
         function_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
         function_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
         function_decl.return_ownership = return_ownership;
@@ -259,6 +276,30 @@ public:
     EnumBuilder enum_(std::string_view name, Options&&... options);
 
 private:
+    struct FunctionDefOptions;
+
+    template <auto Function>
+    ModuleBuilder& add_generic_instantiation(std::string_view name, const FunctionDefOptions& def_options)
+    {
+        const std::string cpp_symbol = def_options.cpp_symbol.empty()
+            ? std::string(detail::function_symbol_name<Function>())
+            : std::string(def_options.cpp_symbol);
+
+        const std::string group_name(name);
+        const std::string unique_suffix = std::format("__csbind23_g{}", module_decl_->functions.size());
+        const std::string managed_name = group_name + unique_suffix;
+        const std::string export_name = group_name + unique_suffix;
+
+        def_impl(managed_name, Function, def_options.return_ownership,
+            def_options.trailing_default_argument_count, cpp_symbol, def_options.csharp_attributes,
+            def_options.arg_options, export_name);
+
+        FunctionDecl& inserted = module_decl_->functions.back();
+        inserted.is_generic_instantiation = true;
+        inserted.generic_group_name = group_name;
+        return *this;
+    }
+
     struct FunctionDefOptions
     {
         Ownership return_ownership = Ownership::Auto;
@@ -456,6 +497,20 @@ public:
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
             def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+        return *this;
+    }
+
+    template <auto FirstMethodPtr, auto... RestMethodPtrs> ClassBuilder& def_generic()
+    {
+        return def_generic<FirstMethodPtr, RestMethodPtrs...>(detail::function_export_name<FirstMethodPtr>());
+    }
+
+    template <auto FirstMethodPtr, auto... RestMethodPtrs, typename... Options>
+    ClassBuilder& def_generic(std::string_view name, Options&&... options)
+    {
+        const auto def_options = make_method_def_options(std::forward<Options>(options)...);
+        add_generic_method_instantiation(name, FirstMethodPtr, def_options);
+        (add_generic_method_instantiation(name, RestMethodPtrs, def_options), ...);
         return *this;
     }
 
@@ -712,6 +767,7 @@ private:
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
+        method_decl.exported_name = std::string(name);
         method_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
         method_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
         method_decl.return_ownership = return_ownership;
@@ -736,6 +792,54 @@ private:
         detail::apply_arg_options(method_decl.parameters, arg_options);
 
         class_decl_->methods.push_back(std::move(method_decl));
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    void add_generic_method_instantiation(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...),
+        const MethodDefOptions& def_options)
+    {
+        (void)method_ptr;
+        if (def_options.allow_override)
+        {
+            class_decl_->enable_virtual_overrides = true;
+        }
+
+        const std::string group_name(name);
+        const std::string unique_suffix = std::format("__csbind23_g{}", class_decl_->methods.size());
+        const std::string managed_name = group_name + unique_suffix;
+
+        add_method<ClassType, ReturnType, Args...>(managed_name, false, def_options.return_ownership,
+            def_options.trailing_default_argument_count, def_options.allow_override, false, false,
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+
+        FunctionDecl& inserted = class_decl_->methods.back();
+        inserted.is_generic_instantiation = true;
+        inserted.generic_group_name = group_name;
+        inserted.exported_name = inserted.name;
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    void add_generic_method_instantiation(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...) const,
+        const MethodDefOptions& def_options)
+    {
+        (void)method_ptr;
+        if (def_options.allow_override)
+        {
+            class_decl_->enable_virtual_overrides = true;
+        }
+
+        const std::string group_name(name);
+        const std::string unique_suffix = std::format("__csbind23_g{}", class_decl_->methods.size());
+        const std::string managed_name = group_name + unique_suffix;
+
+        add_method<ClassType, ReturnType, Args...>(managed_name, true, def_options.return_ownership,
+            def_options.trailing_default_argument_count, def_options.allow_override, false, false,
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+
+        FunctionDecl& inserted = class_decl_->methods.back();
+        inserted.is_generic_instantiation = true;
+        inserted.generic_group_name = group_name;
+        inserted.exported_name = inserted.name;
     }
 
     BindingsGenerator* owner_;

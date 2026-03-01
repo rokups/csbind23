@@ -47,11 +47,14 @@ struct ParameterDecl
 struct FunctionDecl
 {
     std::string name;
+    std::string exported_name;
     std::string cpp_symbol;
     TypeRef return_type;
     std::vector<ParameterDecl> parameters;
     std::size_t trailing_default_argument_count = 0;
     Ownership return_ownership = Ownership::Auto;
+    bool is_generic_instantiation = false;
+    std::string generic_group_name;
 
     bool is_constructor = false;
     bool is_method = false;

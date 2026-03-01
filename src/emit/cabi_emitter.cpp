@@ -44,6 +44,11 @@ std::string render_callback_argument_name(std::size_t index)
     return std::format("__csbind23_arg{}_c", index);
 }
 
+std::string exported_symbol_name(const FunctionDecl& function_decl)
+{
+    return function_decl.exported_name.empty() ? function_decl.name : function_decl.exported_name;
+}
+
 std::size_t normalized_trailing_default_count(const FunctionDecl& function_decl)
 {
     return function_decl.trailing_default_argument_count > function_decl.parameters.size()
@@ -612,8 +617,9 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
     for (const auto& function_decl : module_decl.functions)
     {
+        const std::string exported_symbol = exported_symbol_name(function_decl);
         append_function_signature(
-            generated, function_decl, module_decl.name + "_" + function_decl.name, function_decl.parameters.size());
+            generated, function_decl, module_decl.name + "_" + exported_symbol, function_decl.parameters.size());
         generated.append_line(" {");
         append_free_function_body(generated, function_decl, function_decl.parameters.size());
         generated.append_line("}");
@@ -624,7 +630,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
         {
             const std::size_t parameter_count = function_decl.parameters.size() - omitted;
             const std::string exported_name =
-                module_decl.name + "_" + function_decl.name + std::format("__default_{}", omitted);
+                module_decl.name + "_" + exported_symbol + std::format("__default_{}", omitted);
 
             append_function_signature(generated, function_decl, exported_name, parameter_count);
             generated.append_line(" {");
@@ -761,7 +767,8 @@ std::vector<std::filesystem::path> emit_cabi_module(
         for (const auto& emitted_method : emitted_methods)
         {
             const auto& method_decl = emitted_method.method;
-            const std::string exported_name = module_decl.name + "_" + class_decl.name + "_" + method_decl.name;
+            const std::string exported_name =
+                module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl);
 
             append_method_signature(generated, method_decl, exported_name, method_decl.parameters.size());
             generated.append_line(" {");
