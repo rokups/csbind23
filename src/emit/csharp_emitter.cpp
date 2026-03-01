@@ -9,6 +9,7 @@
 #include "csbind23/text_writer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -28,6 +29,7 @@ namespace
 {
 
 std::string csharp_namespace_name(const ModuleDecl& module_decl);
+std::string wrapper_type_name(const TypeRef& type_ref);
 
 std::filesystem::path write_csharp_file(
     const std::filesystem::path& output_root, const std::string& filename, const std::string& content)
@@ -203,6 +205,193 @@ bool module_uses_pinvoke_type(const ModuleDecl& module_decl, std::string_view pi
     return false;
 }
 
+bool module_uses_managed_type(const ModuleDecl& module_decl, std::string_view managed_type)
+{
+    auto type_matches = [managed_type](const TypeRef& type_ref) {
+        return type_ref.managed_type_name == managed_type;
+    };
+
+    for (const auto& function_decl : module_decl.functions)
+    {
+        if (type_matches(function_decl.return_type))
+        {
+            return true;
+        }
+        for (const auto& parameter : function_decl.parameters)
+        {
+            if (type_matches(parameter.type))
+            {
+                return true;
+            }
+        }
+    }
+
+    for (const auto& class_decl : module_decl.classes)
+    {
+        for (const auto& method_decl : class_decl.methods)
+        {
+            if (type_matches(method_decl.return_type))
+            {
+                return true;
+            }
+            for (const auto& parameter : method_decl.parameters)
+            {
+                if (type_matches(parameter.type))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool module_uses_c_array_int_parameters(const ModuleDecl& module_decl)
+{
+    auto is_int_array_parameter = [](const ParameterDecl& parameter) {
+        return parameter.is_c_array && wrapper_type_name(parameter.type) == "int";
+    };
+
+    for (const auto& function_decl : module_decl.functions)
+    {
+        for (const auto& parameter : function_decl.parameters)
+        {
+            if (is_int_array_parameter(parameter))
+            {
+                return true;
+            }
+        }
+    }
+
+    for (const auto& class_decl : module_decl.classes)
+    {
+        for (const auto& method_decl : class_decl.methods)
+        {
+            for (const auto& parameter : method_decl.parameters)
+            {
+                if (is_int_array_parameter(parameter))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool parameter_is_supported_c_array_int(const ParameterDecl& parameter)
+{
+    return parameter.is_c_array && wrapper_type_name(parameter.type) == "int";
+}
+
+std::optional<std::size_t> try_parse_fixed_int_array_extent_from_expression(std::string_view expression)
+{
+    constexpr std::string_view marker = "IntArrayToNativeFixed({value},";
+    const std::size_t marker_pos = expression.find(marker);
+    if (marker_pos == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+
+    std::size_t cursor = marker_pos + marker.size();
+    while (cursor < expression.size() && std::isspace(static_cast<unsigned char>(expression[cursor])) != 0)
+    {
+        ++cursor;
+    }
+
+    std::size_t end = cursor;
+    while (end < expression.size() && std::isdigit(static_cast<unsigned char>(expression[end])) != 0)
+    {
+        ++end;
+    }
+
+    if (cursor == end)
+    {
+        return std::nullopt;
+    }
+
+    std::size_t extent = 0;
+    for (std::size_t index = cursor; index < end; ++index)
+    {
+        extent = extent * 10 + static_cast<std::size_t>(expression[index] - '0');
+    }
+    return extent;
+}
+
+std::optional<std::size_t> fixed_std_array_int_extent(const ParameterDecl& parameter)
+{
+    if (parameter.is_c_array)
+    {
+        return std::nullopt;
+    }
+    if (wrapper_type_name(parameter.type) != "int[]")
+    {
+        return std::nullopt;
+    }
+    if (parameter.type.pinvoke_name != "System.IntPtr")
+    {
+        return std::nullopt;
+    }
+    if (parameter.type.managed_to_pinvoke_expression.empty())
+    {
+        return std::nullopt;
+    }
+
+    return try_parse_fixed_int_array_extent_from_expression(parameter.type.managed_to_pinvoke_expression);
+}
+
+std::optional<std::size_t> inferred_c_array_source_index(
+    const FunctionDecl& function_decl, std::size_t size_parameter_index)
+{
+    for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
+    {
+        const auto& parameter = function_decl.parameters[index];
+        if (!parameter_is_supported_c_array_int(parameter))
+        {
+            continue;
+        }
+
+        if (parameter.c_array_size_param_index == size_parameter_index)
+        {
+            return index;
+        }
+    }
+
+    return std::nullopt;
+}
+
+bool parameter_is_inferred_c_array_size(const FunctionDecl& function_decl, std::size_t parameter_index)
+{
+    return inferred_c_array_source_index(function_decl, parameter_index).has_value();
+}
+
+std::string c_array_count_expression(const FunctionDecl& function_decl, std::size_t parameter_index)
+{
+    const auto& parameter = function_decl.parameters[parameter_index];
+    if (parameter.c_array_size_param_index < function_decl.parameters.size())
+    {
+        if (parameter_is_inferred_c_array_size(function_decl, parameter.c_array_size_param_index))
+        {
+            return std::format("{}.Length", parameter.name);
+        }
+        return std::format("checked((int){})", function_decl.parameters[parameter.c_array_size_param_index].name);
+    }
+
+    return std::format("{}.Length", parameter.name);
+}
+
+std::string public_parameter_type_name(const ParameterDecl& parameter)
+{
+    if (parameter_is_supported_c_array_int(parameter))
+    {
+        return "int[]";
+    }
+
+    return wrapper_type_name(parameter.type);
+}
+
 void emit_shared_pinvoke_types_if_needed(
     const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
 {
@@ -341,6 +530,109 @@ void emit_shared_instance_cache_types_if_needed(
     generated_files.push_back(write_csharp_file(output_root, "csbind23.instance_cache.g.cs", shared.str()));
 }
 
+void emit_shared_array_interop_types_if_needed(
+    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
+{
+    if (!module_uses_managed_type(module_decl, "int[]") && !module_uses_c_array_int_parameters(module_decl))
+    {
+        return;
+    }
+
+    const auto shared_path = output_root / "csbind23.array.g.cs";
+    if (std::filesystem::exists(shared_path))
+    {
+        return;
+    }
+
+    TextWriter shared(1024);
+    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    shared.append_line();
+    shared.append_line("public static class CsBind23ArrayInterop");
+    shared.append_line("{");
+    shared.append_line("    public static System.IntPtr IntArrayToNativeFixed(int[] value, int expectedLength)");
+    shared.append_line("    {");
+    shared.append_line("        if (value == null || value.Length != expectedLength)");
+    shared.append_line("        {");
+    shared.append_line("            throw new System.ArgumentException($\"Expected array length {expectedLength}\", nameof(value));");
+    shared.append_line("        }");
+    shared.append_line();
+    shared.append_line("        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * expectedLength);");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, expectedLength);");
+    shared.append_line("        return ptr;");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static System.IntPtr IntArrayToNativeCounted(int[] value, int count, string paramName)");
+    shared.append_line("    {");
+    shared.append_line("        if (value == null)");
+    shared.append_line("        {");
+    shared.append_line("            throw new System.ArgumentNullException(paramName);");
+    shared.append_line("        }");
+    shared.append_line("        if (count < 0 || count > value.Length)");
+    shared.append_line("        {");
+    shared.append_line("            throw new System.ArgumentOutOfRangeException(paramName, $\"Count {count} must be between 0 and array length {value.Length}.\");");
+    shared.append_line("        }");
+    shared.append_line("        if (count == 0)");
+    shared.append_line("        {");
+    shared.append_line("            return System.IntPtr.Zero;");
+    shared.append_line("        }");
+    shared.append_line();
+    shared.append_line("        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * count);");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, count);");
+    shared.append_line("        return ptr;");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static int[] NativeToNewIntArrayFixed(System.IntPtr ptr, int expectedLength)");
+    shared.append_line("    {");
+    shared.append_line("        int[] value = new int[expectedLength];");
+    shared.append_line("        if (ptr != System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            System.Runtime.InteropServices.Marshal.Copy(ptr, value, 0, expectedLength);");
+    shared.append_line("        }");
+    shared.append_line("        return value;");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static void NativeToExistingIntArrayFixed(System.IntPtr ptr, int[] target, int expectedLength)");
+    shared.append_line("    {");
+    shared.append_line("        if (ptr == System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            return;");
+    shared.append_line("        }");
+    shared.append_line("        if (target == null || target.Length != expectedLength)");
+    shared.append_line("        {");
+    shared.append_line("            throw new System.ArgumentException($\"Expected array length {expectedLength}\", nameof(target));");
+    shared.append_line("        }");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, expectedLength);");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static void NativeToExistingIntArrayCounted(System.IntPtr ptr, int[] target, int count, string paramName)");
+    shared.append_line("    {");
+    shared.append_line("        if (target == null)");
+    shared.append_line("        {");
+    shared.append_line("            throw new System.ArgumentNullException(paramName);");
+    shared.append_line("        }");
+    shared.append_line("        if (count < 0 || count > target.Length)");
+    shared.append_line("        {");
+    shared.append_line("            throw new System.ArgumentOutOfRangeException(paramName, $\"Count {count} must be between 0 and array length {target.Length}.\");");
+    shared.append_line("        }");
+    shared.append_line("        if (ptr == System.IntPtr.Zero || count == 0)");
+    shared.append_line("        {");
+    shared.append_line("            return;");
+    shared.append_line("        }");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, count);");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static void FreeNativeBuffer(System.IntPtr ptr)");
+    shared.append_line("    {");
+    shared.append_line("        if (ptr != System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);");
+    shared.append_line("        }");
+    shared.append_line("    }");
+    shared.append_line("}");
+
+    generated_files.push_back(write_csharp_file(output_root, "csbind23.array.g.cs", shared.str()));
+}
+
 std::string pinvoke_return_type(const FunctionDecl& function_decl)
 {
     if (function_decl.is_constructor)
@@ -361,6 +653,11 @@ std::string wrapper_type_name(const TypeRef& type_ref)
 
 bool parameter_is_ref(const ParameterDecl& parameter)
 {
+    if (parameter.is_c_array)
+    {
+        return false;
+    }
+
     if (parameter.type.is_reference && !parameter.type.is_const)
     {
         return true;
@@ -802,15 +1099,22 @@ std::string csharp_enum_value_literal(const EnumDecl& enum_decl, const EnumValue
 std::string parameter_list_without_self(const FunctionDecl& function_decl)
 {
     std::string rendered;
+    bool first = true;
     for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
     {
+        if (parameter_is_inferred_c_array_size(function_decl, index))
+        {
+            continue;
+        }
+
         const auto& parameter = function_decl.parameters[index];
-        rendered += std::format("{}{} {}", parameter_signature_byref_keyword(parameter), wrapper_type_name(parameter.type),
-            parameter.name);
-        if (index + 1 < function_decl.parameters.size())
+        if (!first)
         {
             rendered += ", ";
         }
+        rendered += std::format("{}{} {}", parameter_signature_byref_keyword(parameter), public_parameter_type_name(parameter),
+            parameter.name);
+        first = false;
     }
     return rendered;
 }
@@ -874,7 +1178,7 @@ bool is_nullable_optional_parameter(const ModuleDecl& module_decl, const Functio
 std::string parameter_type_for_public_signature(
     const ModuleDecl& module_decl, const FunctionDecl& function_decl, const ParameterDecl& parameter, std::size_t index)
 {
-    std::string type_name = wrapper_type_name(parameter.type);
+    std::string type_name = public_parameter_type_name(parameter);
     if (!is_nullable_optional_parameter(module_decl, function_decl, index))
     {
         return type_name;
@@ -887,15 +1191,22 @@ std::string parameter_type_for_public_signature(
 std::string free_function_parameter_list(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
 {
     std::string rendered;
+    bool first = true;
     for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
     {
+        if (parameter_is_inferred_c_array_size(function_decl, index))
+        {
+            continue;
+        }
+
         const auto& parameter = function_decl.parameters[index];
-        rendered += std::format("{}{} {}", parameter_signature_byref_keyword(parameter),
-            parameter_type_for_public_signature(module_decl, function_decl, parameter, index), parameter.name);
-        if (index + 1 < function_decl.parameters.size())
+        if (!first)
         {
             rendered += ", ";
         }
+        rendered += std::format("{}{} {}", parameter_signature_byref_keyword(parameter),
+            parameter_type_for_public_signature(module_decl, function_decl, parameter, index), parameter.name);
+        first = false;
     }
     return rendered;
 }
@@ -2233,7 +2544,9 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
         {
             output.append(", ");
         }
-        output.append_format("{}{} {}", parameter_direct_byref_keyword(parameter), parameter.type.pinvoke_name,
+        const std::string pinvoke_parameter_type =
+            parameter_is_supported_c_array_int(parameter) ? "System.IntPtr" : parameter.type.pinvoke_name;
+        output.append_format("{}{} {}", parameter_direct_byref_keyword(parameter), pinvoke_parameter_type,
             parameter.name);
         needs_separator = true;
     }
@@ -2307,10 +2620,47 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
 
     std::vector<std::string> call_arguments;
     std::vector<std::string> finalize_statements;
+    std::vector<std::pair<std::string, std::string>> pinned_array_parameters;
+    std::unordered_set<std::string> null_checked_pinned_arrays;
     call_arguments.reserve(method_decl.parameters.size());
     for (std::size_t index = 0; index < method_decl.parameters.size(); ++index)
     {
+        if (const auto source_index = inferred_c_array_source_index(method_decl, index); source_index.has_value())
+        {
+            call_arguments.push_back(std::format("checked((int){}.Length)", method_decl.parameters[*source_index].name));
+            continue;
+        }
+
         const auto& parameter = method_decl.parameters[index];
+        if (parameter_is_supported_c_array_int(parameter))
+        {
+            const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+            pinned_array_parameters.emplace_back(pinned_name, parameter.name);
+            call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
+            continue;
+        }
+
+        if (const auto fixed_extent = fixed_std_array_int_extent(parameter); fixed_extent.has_value())
+        {
+            output.append_line_format("        if ({} == null)", parameter.name);
+            output.append_line("        {");
+            output.append_line_format("            throw new System.ArgumentNullException(nameof({}));", parameter.name);
+            output.append_line("        }");
+            output.append_line_format("        if ({}.Length != {})", parameter.name, *fixed_extent);
+            output.append_line("        {");
+            output.append_line_format(
+                "            throw new System.ArgumentException($\"Expected array length {}\", nameof({}));",
+                *fixed_extent,
+                parameter.name);
+            output.append_line("        }");
+
+            const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+            pinned_array_parameters.emplace_back(pinned_name, parameter.name);
+            null_checked_pinned_arrays.insert(parameter.name);
+            call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
+            continue;
+        }
+
         if (!parameter.type.managed_to_pinvoke_expression.empty())
         {
             const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
@@ -2348,6 +2698,29 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     const bool has_return_converter = !method_decl.return_type.managed_from_pinvoke_expression.empty();
     const bool has_return_finalize = !method_decl.return_type.managed_finalize_from_pinvoke_statement.empty();
     const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
+
+    for (const auto& pinned_parameter : pinned_array_parameters)
+    {
+        if (null_checked_pinned_arrays.contains(pinned_parameter.second))
+        {
+            continue;
+        }
+        output.append_line_format("        if ({} == null)", pinned_parameter.second);
+        output.append_line("        {");
+        output.append_line_format("            throw new System.ArgumentNullException(nameof({}));", pinned_parameter.second);
+        output.append_line("        }");
+    }
+    if (!pinned_array_parameters.empty())
+    {
+        output.append_line("        unsafe");
+        output.append_line("        {");
+        for (const auto& pinned_parameter : pinned_array_parameters)
+        {
+            output.append_line_format("            fixed (int* {} = {})", pinned_parameter.first, pinned_parameter.second);
+            output.append_line("            {");
+        }
+    }
+
     const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, method_decl);
 
     if (return_type == "void")
@@ -2464,6 +2837,15 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             }
             output.append_line("        }");
         }
+    }
+
+    if (!pinned_array_parameters.empty())
+    {
+        for (std::size_t index = 0; index < pinned_array_parameters.size(); ++index)
+        {
+            output.append_line("            }");
+        }
+        output.append_line("        }");
     }
 
     output.append_line("    }");
@@ -2805,10 +3187,31 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
 
         std::vector<std::string> converted_arguments;
         std::vector<std::string> finalize_statements;
+        std::vector<std::pair<std::string, std::string>> pinned_array_parameters;
         converted_arguments.reserve(method_decl.parameters.size());
         for (std::size_t index = 0; index < method_decl.parameters.size(); ++index)
         {
             const auto& parameter = method_decl.parameters[index];
+            if (const auto fixed_extent = fixed_std_array_int_extent(parameter); fixed_extent.has_value())
+            {
+                output.append_line_format("        if ({} == null)", parameter.name);
+                output.append_line("        {");
+                output.append_line_format("            throw new System.ArgumentNullException(nameof({}));", parameter.name);
+                output.append_line("        }");
+                output.append_line_format("        if ({}.Length != {})", parameter.name, *fixed_extent);
+                output.append_line("        {");
+                output.append_line_format(
+                    "            throw new System.ArgumentException($\"Expected array length {}\", nameof({}));",
+                    *fixed_extent,
+                    parameter.name);
+                output.append_line("        }");
+
+                const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+                pinned_array_parameters.emplace_back(pinned_name, parameter.name);
+                converted_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
+                continue;
+            }
+
             if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
@@ -2837,6 +3240,17 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             ? std::format("{}Native.{}()", module_name, create_name)
             : std::format("{}Native.{}({})", module_name, create_name, converted_arguments_rendered);
 
+        if (!pinned_array_parameters.empty())
+        {
+            output.append_line("        unsafe");
+            output.append_line("        {");
+            for (const auto& pinned_parameter : pinned_array_parameters)
+            {
+                output.append_line_format("            fixed (int* {} = {})", pinned_parameter.first, pinned_parameter.second);
+                output.append_line("            {");
+            }
+        }
+
         if (finalize_statements.empty())
         {
             output.append_line_format("        _handle = {};", native_call);
@@ -2852,6 +3266,15 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             for (const auto& finalize_statement : finalize_statements)
             {
                 append_embedded_statement(output, "            ", finalize_statement);
+            }
+            output.append_line("        }");
+        }
+
+        if (!pinned_array_parameters.empty())
+        {
+            for (std::size_t index = 0; index < pinned_array_parameters.size(); ++index)
+            {
+                output.append_line("            }");
             }
             output.append_line("        }");
         }
@@ -3030,6 +3453,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
                 output.append_line_format("        set => {}(value);", managed_method_name(module_decl, *setter));
             }
         }
+
         output.append_line("    }");
         output.append_line();
     }
@@ -3048,6 +3472,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::vector<std::filesystem::path> generated_files;
     emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
     emit_shared_instance_cache_types_if_needed(module_decl, output_root, generated_files);
+    emit_shared_array_interop_types_if_needed(module_decl, output_root, generated_files);
 
     std::unordered_set<std::string> emitted_interfaces;
     for (const auto& class_decl : module_decl.classes)
@@ -3289,12 +3714,51 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
         std::vector<std::string> call_arguments;
         std::vector<std::string> finalize_statements;
+        std::vector<std::pair<std::string, std::string>> pinned_array_parameters;
+        std::unordered_set<std::string> null_checked_pinned_arrays;
         call_arguments.reserve(function_decl.parameters.size());
         for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
         {
+            if (const auto source_index = inferred_c_array_source_index(function_decl, index); source_index.has_value())
+            {
+                const std::string source_argument_expr = nullable_parameter_unwrap_expression(
+                    module_decl, function_decl, function_decl.parameters[*source_index], *source_index);
+                call_arguments.push_back(std::format("checked((int){}.Length)", source_argument_expr));
+                continue;
+            }
+
             const auto& parameter = function_decl.parameters[index];
             const std::string managed_argument_expr =
                 nullable_parameter_unwrap_expression(module_decl, function_decl, parameter, index);
+            if (parameter_is_supported_c_array_int(parameter))
+            {
+                const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+                pinned_array_parameters.emplace_back(pinned_name, parameter.name);
+                call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
+                continue;
+            }
+
+            if (const auto fixed_extent = fixed_std_array_int_extent(parameter); fixed_extent.has_value())
+            {
+                generated.append_line_format("        if ({} == null)", parameter.name);
+                generated.append_line("        {");
+                generated.append_line_format("            throw new System.ArgumentNullException(nameof({}));", parameter.name);
+                generated.append_line("        }");
+                generated.append_line_format("        if ({}.Length != {})", parameter.name, *fixed_extent);
+                generated.append_line("        {");
+                generated.append_line_format(
+                    "            throw new System.ArgumentException($\"Expected array length {}\", nameof({}));",
+                    *fixed_extent,
+                    parameter.name);
+                generated.append_line("        }");
+
+                const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+                pinned_array_parameters.emplace_back(pinned_name, parameter.name);
+                null_checked_pinned_arrays.insert(parameter.name);
+                call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
+                continue;
+            }
+
             if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
@@ -3336,6 +3800,29 @@ std::vector<std::filesystem::path> emit_csharp_module(
         const bool has_return_converter = !function_decl.return_type.managed_from_pinvoke_expression.empty();
         const bool has_return_finalize = !function_decl.return_type.managed_finalize_from_pinvoke_statement.empty();
         const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
+
+        for (const auto& pinned_parameter : pinned_array_parameters)
+        {
+            if (null_checked_pinned_arrays.contains(pinned_parameter.second))
+            {
+                continue;
+            }
+            generated.append_line_format("        if ({} == null)", pinned_parameter.second);
+            generated.append_line("        {");
+            generated.append_line_format("            throw new System.ArgumentNullException(nameof({}));", pinned_parameter.second);
+            generated.append_line("        }");
+        }
+        if (!pinned_array_parameters.empty())
+        {
+            generated.append_line("        unsafe");
+            generated.append_line("        {");
+            for (const auto& pinned_parameter : pinned_array_parameters)
+            {
+                generated.append_line_format("            fixed (int* {} = {})", pinned_parameter.first, pinned_parameter.second);
+                generated.append_line("            {");
+            }
+        }
+
         const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, function_decl);
 
         if (return_type == "void")
@@ -3530,6 +4017,16 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 }
             }
         }
+
+        if (!pinned_array_parameters.empty())
+        {
+            for (std::size_t index = 0; index < pinned_array_parameters.size(); ++index)
+            {
+                generated.append_line("            }");
+            }
+            generated.append_line("        }");
+        }
+
         generated.append_line("    }");
         generated.append_line();
     }

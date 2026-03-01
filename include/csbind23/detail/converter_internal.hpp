@@ -54,49 +54,49 @@ template <typename Type> std::string c_abi_type_name_for()
     return std::string(Converter<Bare>::c_abi_type_name());
 }
 
-template <typename Type> constexpr std::string_view managed_type_name_for()
+template <typename Type> std::string managed_type_name_for()
 {
     if constexpr (requires { Converter<Type>::managed_type_name(); })
     {
-        return Converter<Type>::managed_type_name();
+        return std::string(Converter<Type>::managed_type_name());
     }
-    return "";
+    return {};
 }
 
-template <typename Type> constexpr std::string_view managed_to_pinvoke_expression_for()
+template <typename Type> std::string managed_to_pinvoke_expression_for()
 {
     if constexpr (requires { Converter<Type>::managed_to_pinvoke_expression(); })
     {
-        return Converter<Type>::managed_to_pinvoke_expression();
+        return std::string(Converter<Type>::managed_to_pinvoke_expression());
     }
-    return "";
+    return {};
 }
 
-template <typename Type> constexpr std::string_view managed_from_pinvoke_expression_for()
+template <typename Type> std::string managed_from_pinvoke_expression_for()
 {
     if constexpr (requires { Converter<Type>::managed_from_pinvoke_expression(); })
     {
-        return Converter<Type>::managed_from_pinvoke_expression();
+        return std::string(Converter<Type>::managed_from_pinvoke_expression());
     }
-    return "";
+    return {};
 }
 
-template <typename Type> constexpr std::string_view managed_finalize_to_pinvoke_statement_for()
+template <typename Type> std::string managed_finalize_to_pinvoke_statement_for()
 {
     if constexpr (requires { Converter<Type>::managed_finalize_to_pinvoke_statement(); })
     {
-        return Converter<Type>::managed_finalize_to_pinvoke_statement();
+        return std::string(Converter<Type>::managed_finalize_to_pinvoke_statement());
     }
-    return "";
+    return {};
 }
 
-template <typename Type> constexpr std::string_view managed_finalize_from_pinvoke_statement_for()
+template <typename Type> std::string managed_finalize_from_pinvoke_statement_for()
 {
     if constexpr (requires { Converter<Type>::managed_finalize_from_pinvoke_statement(); })
     {
-        return Converter<Type>::managed_finalize_from_pinvoke_statement();
+        return std::string(Converter<Type>::managed_finalize_from_pinvoke_statement());
     }
-    return "";
+    return {};
 }
 
 template <typename Type> std::string c_abi_param_type_name_for()

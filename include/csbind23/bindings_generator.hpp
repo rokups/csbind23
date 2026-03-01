@@ -82,6 +82,8 @@ struct Arg
     std::size_t idx = 0;
     std::string_view name = {};
     bool output = false;
+    bool c_array = false;
+    std::size_t size_param_idx = std::numeric_limits<std::size_t>::max();
 };
 
 namespace detail
@@ -137,6 +139,11 @@ inline void apply_arg_options(std::vector<ParameterDecl>& parameters, const std:
             parameter.name = std::string(arg_option.name);
         }
         parameter.is_output = arg_option.output;
+        parameter.is_c_array = arg_option.c_array;
+        if (arg_option.c_array && arg_option.size_param_idx < parameters.size())
+        {
+            parameter.c_array_size_param_index = arg_option.size_param_idx;
+        }
     }
 }
 

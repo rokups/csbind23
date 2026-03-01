@@ -3,6 +3,7 @@
 #include <string>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <functional>
 #include <string_view>
 #include <vector>
@@ -53,6 +54,8 @@ struct ParameterDecl
     std::string name;
     TypeRef type;
     bool is_output = false;
+    bool is_c_array = false;
+    std::size_t c_array_size_param_index = std::numeric_limits<std::size_t>::max();
 };
 
 struct FunctionDecl

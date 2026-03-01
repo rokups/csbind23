@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -281,6 +282,31 @@ struct MutableStringManagedInterop
     }
 };
 
+template <std::size_t Extent> std::string array_int_to_pinvoke_expression()
+{
+    return std::string("global::CsBind23.Generated.CsBind23ArrayInterop.IntArrayToNativeFixed({value}, ")
+        + std::to_string(Extent) + ")";
+}
+
+template <std::size_t Extent> std::string array_int_from_pinvoke_expression()
+{
+    return std::string("global::CsBind23.Generated.CsBind23ArrayInterop.NativeToNewIntArrayFixed({value}, ")
+        + std::to_string(Extent) + ")";
+}
+
+template <std::size_t Extent> std::string array_int_finalize_copyback_to_pinvoke_statement()
+{
+    return std::string("global::CsBind23.Generated.CsBind23ArrayInterop.NativeToExistingIntArrayFixed({pinvoke}, {managed}, ")
+        + std::to_string(Extent)
+        + ")\n"
+          "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({pinvoke})";
+}
+
+inline constexpr std::string_view array_int_finalize_free_statement()
+{
+    return "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({pinvoke})";
+}
+
 } // namespace detail
 
 template <> struct Converter<std::string>
@@ -410,6 +436,194 @@ template <> struct Converter<const std::string*> : detail::ConstStringManagedInt
 
     static constexpr std::string_view c_abi_type_name() { return "const void*"; }
     static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+template <std::size_t Extent> struct Converter<std::array<int, Extent>>
+{
+    using cpp_type = std::array<int, Extent>;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view c_abi_return_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_param_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_return_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return "int[]"; }
+
+    static std::string managed_to_pinvoke_expression()
+    {
+        return detail::array_int_to_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_from_pinvoke_expression()
+    {
+        return detail::array_int_from_pinvoke_expression<Extent>();
+    }
+
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        auto* buffer = static_cast<int*>(std::malloc(sizeof(int) * Extent));
+        if (buffer == nullptr)
+        {
+            return nullptr;
+        }
+        std::memcpy(buffer, value.data(), sizeof(int) * Extent);
+        return static_cast<c_abi_type>(buffer);
+    }
+
+    static cpp_type from_c_abi(c_abi_type value)
+    {
+        cpp_type managed{};
+        if (value == nullptr)
+        {
+            return managed;
+        }
+
+        std::memcpy(managed.data(), static_cast<const int*>(value), sizeof(int) * Extent);
+        return managed;
+    }
+};
+
+template <std::size_t Extent> struct Converter<std::array<int, Extent>&>
+{
+    using cpp_type = std::array<int, Extent>&;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return "int[]"; }
+
+    static std::string managed_to_pinvoke_expression()
+    {
+        return detail::array_int_to_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_from_pinvoke_expression()
+    {
+        return detail::array_int_from_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_finalize_to_pinvoke_statement()
+    {
+        return detail::array_int_finalize_copyback_to_pinvoke_statement<Extent>();
+    }
+
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<std::array<int, Extent>*>(value); }
+};
+
+template <std::size_t Extent> struct Converter<const std::array<int, Extent>&>
+{
+    using cpp_type = const std::array<int, Extent>&;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return "int[]"; }
+
+    static std::string managed_to_pinvoke_expression()
+    {
+        return detail::array_int_to_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_from_pinvoke_expression()
+    {
+        return detail::array_int_from_pinvoke_expression<Extent>();
+    }
+
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<const std::array<int, Extent>*>(value); }
+};
+
+template <std::size_t Extent> struct Converter<std::array<int, Extent>*>
+{
+    using cpp_type = std::array<int, Extent>*;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return "int[]"; }
+
+    static std::string managed_to_pinvoke_expression()
+    {
+        return detail::array_int_to_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_from_pinvoke_expression()
+    {
+        return detail::array_int_from_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_finalize_to_pinvoke_statement()
+    {
+        return detail::array_int_finalize_copyback_to_pinvoke_statement<Extent>();
+    }
+
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+template <std::size_t Extent> struct Converter<const std::array<int, Extent>*>
+{
+    using cpp_type = const std::array<int, Extent>*;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return "int[]"; }
+
+    static std::string managed_to_pinvoke_expression()
+    {
+        return detail::array_int_to_pinvoke_expression<Extent>();
+    }
+
+    static std::string managed_from_pinvoke_expression()
+    {
+        return detail::array_int_from_pinvoke_expression<Extent>();
+    }
+
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
+
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return detail::array_int_finalize_free_statement();
+    }
 
     static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
     static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
