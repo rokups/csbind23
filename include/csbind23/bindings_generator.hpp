@@ -464,6 +464,41 @@ public:
         return property(name, GetterPtr, detail::function_symbol_name<GetterPtr>());
     }
 
+    template <auto FieldPtr> ClassBuilder& field()
+    {
+        return field<FieldPtr>(detail::unqualified_name(detail::function_symbol_name<FieldPtr>()));
+    }
+
+    template <auto FieldPtr> ClassBuilder& field(std::string_view name)
+    {
+        using FieldTraits = detail::FieldPointerTraits<decltype(FieldPtr)>;
+        using ClassType = typename FieldTraits::class_type;
+        using FieldType = typename FieldTraits::field_type;
+        using BareFieldType = std::remove_const_t<FieldType>;
+
+        PropertyDecl property_decl;
+        property_decl.name = std::string(name);
+        property_decl.type = owner_->make_bound_type_ref<BareFieldType>();
+        property_decl.has_getter = true;
+        property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
+
+        const std::string field_symbol = detail::unqualified_name(detail::function_symbol_name<FieldPtr>());
+
+        add_method<ClassType, BareFieldType>(property_decl.getter_name, true, Ownership::Auto, 0, false,
+            true, false, field_symbol, {}, {}, true);
+
+        if constexpr (!std::is_const_v<FieldType>)
+        {
+            property_decl.has_setter = true;
+            property_decl.setter_name = std::string("__csbind23_propset_") + std::string(name);
+            add_method<ClassType, void, BareFieldType>(property_decl.setter_name, false, Ownership::Auto, 0,
+                false, false, true, field_symbol, {}, {}, true);
+        }
+
+        class_decl_->properties.push_back(std::move(property_decl));
+        return *this;
+    }
+
     template <auto GetterPtr, auto SetterPtr> ClassBuilder& property(std::string_view name)
     {
         return property(name, GetterPtr, SetterPtr, detail::function_symbol_name<GetterPtr>(),
@@ -672,7 +707,8 @@ private:
     void add_method(std::string_view name, bool is_const, Ownership return_ownership,
         std::size_t trailing_default_argument_count = 0, bool allow_override = false,
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
-        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {})
+        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {},
+        bool is_field_accessor = false)
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
@@ -686,6 +722,7 @@ private:
         method_decl.allow_override = allow_override;
         method_decl.is_property_getter = is_property_getter;
         method_decl.is_property_setter = is_property_setter;
+        method_decl.is_field_accessor = is_field_accessor;
         method_decl.class_name = class_decl_->cpp_name;
         method_decl.virtual_slot_name = std::string(name);
         method_decl.csharp_attributes = std::move(csharp_attributes);

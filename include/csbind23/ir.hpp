@@ -62,6 +62,7 @@ struct FunctionDecl
     bool allow_override = false;
     bool is_property_getter = false;
     bool is_property_setter = false;
+    bool is_field_accessor = false;
     std::string class_name;
     std::string virtual_slot_name;
     std::vector<std::string> csharp_attributes;

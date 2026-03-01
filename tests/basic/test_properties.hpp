@@ -43,6 +43,14 @@ private:
     std::string label_ = "initial";
 };
 
+class PublicFieldBag
+{
+public:
+    int count = 3;
+    std::string label = "field";
+    const int version = 7;
+};
+
 } // namespace csbind23::testing::properties
 
 namespace csbind23::testing
@@ -60,6 +68,12 @@ inline void register_bindings_properties(BindingsGenerator& generator, std::stri
         .property<&properties::PropertyBag::get_count, &properties::PropertyBag::set_count>("Count")
         .property<&properties::PropertyBag::get_label, &properties::PropertyBag::set_label>("Label")
         .property<&properties::PropertyBag::get_read_only_tag>("ReadOnlyTag");
+
+    module.class_<properties::PublicFieldBag>()
+        .ctor<>()
+        .field<&properties::PublicFieldBag::count>("Count")
+        .field<&properties::PublicFieldBag::label>("Label")
+        .field<&properties::PublicFieldBag::version>("Version");
 }
 
 } // namespace csbind23::testing

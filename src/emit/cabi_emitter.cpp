@@ -481,6 +481,27 @@ void append_method_body(
     const auto parameters = leading_parameters(method_decl, parameter_count);
     append_converted_arguments(output, parameters);
 
+    if (method_decl.is_field_accessor)
+    {
+        const std::string field_expression = std::format("instance->{}", method_decl.cpp_symbol);
+        if (method_decl.is_property_getter)
+        {
+            output.append_line_format("    decltype(auto) result = ({});", field_expression);
+            output.append_line_format(
+                "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
+            return;
+        }
+
+        if (method_decl.is_property_setter)
+        {
+            if (!parameters.empty())
+            {
+                output.append_line_format("    {} = {};", field_expression, render_converted_argument_name(0));
+            }
+            return;
+        }
+    }
+
     const std::string call_arguments = render_call_arguments(parameters);
     const std::string owner_class_name = method_decl.class_name.empty() ? class_decl.cpp_name : method_decl.class_name;
     const std::string method_expr = explicit_base_call

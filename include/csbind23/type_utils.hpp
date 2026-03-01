@@ -115,6 +115,15 @@ struct MethodPointerTraits<ReturnType (ClassType::*)(Args...) const>
     static constexpr bool is_const = true;
 };
 
+template <typename Type> struct FieldPointerTraits;
+
+template <typename ClassType, typename FieldType>
+struct FieldPointerTraits<FieldType ClassType::*>
+{
+    using class_type = ClassType;
+    using field_type = FieldType;
+};
+
 template <typename Type> TypeRef make_type_ref();
 template <typename Type> TypeRef make_param_type_ref();
 template <typename Type> TypeRef make_return_type_ref();
