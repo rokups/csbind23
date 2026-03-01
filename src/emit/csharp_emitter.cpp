@@ -547,88 +547,89 @@ void emit_shared_array_interop_types_if_needed(
     TextWriter shared(1024);
     shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
-    shared.append_line("public static class CsBind23ArrayInterop");
-    shared.append_line("{");
-    shared.append_line("    public static System.IntPtr IntArrayToNativeFixed(int[] value, int expectedLength)");
-    shared.append_line("    {");
-    shared.append_line("        if (value == null || value.Length != expectedLength)");
-    shared.append_line("        {");
-    shared.append_line("            throw new System.ArgumentException($\"Expected array length {expectedLength}\", nameof(value));");
-    shared.append_line("        }");
-    shared.append_line();
-    shared.append_line("        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * expectedLength);");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, expectedLength);");
-    shared.append_line("        return ptr;");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static System.IntPtr IntArrayToNativeCounted(int[] value, int count, string paramName)");
-    shared.append_line("    {");
-    shared.append_line("        if (value == null)");
-    shared.append_line("        {");
-    shared.append_line("            throw new System.ArgumentNullException(paramName);");
-    shared.append_line("        }");
-    shared.append_line("        if (count < 0 || count > value.Length)");
-    shared.append_line("        {");
-    shared.append_line("            throw new System.ArgumentOutOfRangeException(paramName, $\"Count {count} must be between 0 and array length {value.Length}.\");");
-    shared.append_line("        }");
-    shared.append_line("        if (count == 0)");
-    shared.append_line("        {");
-    shared.append_line("            return System.IntPtr.Zero;");
-    shared.append_line("        }");
-    shared.append_line();
-    shared.append_line("        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * count);");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, count);");
-    shared.append_line("        return ptr;");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static int[] NativeToNewIntArrayFixed(System.IntPtr ptr, int expectedLength)");
-    shared.append_line("    {");
-    shared.append_line("        int[] value = new int[expectedLength];");
-    shared.append_line("        if (ptr != System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            System.Runtime.InteropServices.Marshal.Copy(ptr, value, 0, expectedLength);");
-    shared.append_line("        }");
-    shared.append_line("        return value;");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static void NativeToExistingIntArrayFixed(System.IntPtr ptr, int[] target, int expectedLength)");
-    shared.append_line("    {");
-    shared.append_line("        if (ptr == System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            return;");
-    shared.append_line("        }");
-    shared.append_line("        if (target == null || target.Length != expectedLength)");
-    shared.append_line("        {");
-    shared.append_line("            throw new System.ArgumentException($\"Expected array length {expectedLength}\", nameof(target));");
-    shared.append_line("        }");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, expectedLength);");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static void NativeToExistingIntArrayCounted(System.IntPtr ptr, int[] target, int count, string paramName)");
-    shared.append_line("    {");
-    shared.append_line("        if (target == null)");
-    shared.append_line("        {");
-    shared.append_line("            throw new System.ArgumentNullException(paramName);");
-    shared.append_line("        }");
-    shared.append_line("        if (count < 0 || count > target.Length)");
-    shared.append_line("        {");
-    shared.append_line("            throw new System.ArgumentOutOfRangeException(paramName, $\"Count {count} must be between 0 and array length {target.Length}.\");");
-    shared.append_line("        }");
-    shared.append_line("        if (ptr == System.IntPtr.Zero || count == 0)");
-    shared.append_line("        {");
-    shared.append_line("            return;");
-    shared.append_line("        }");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, count);");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static void FreeNativeBuffer(System.IntPtr ptr)");
-    shared.append_line("    {");
-    shared.append_line("        if (ptr != System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);");
-    shared.append_line("        }");
-    shared.append_line("    }");
-    shared.append_line("}");
+    shared.append(R"(public static class CsBind23ArrayInterop
+    {
+        public static System.IntPtr IntArrayToNativeFixed(int[] value, int expectedLength)
+        {
+            if (value == null || value.Length != expectedLength)
+            {
+                throw new System.ArgumentException($"Expected array length {expectedLength}", nameof(value));
+            }
+
+            System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * expectedLength);
+            System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, expectedLength);
+            return ptr;
+        }
+
+        public static System.IntPtr IntArrayToNativeCounted(int[] value, int count, string paramName)
+        {
+            if (value == null)
+            {
+                throw new System.ArgumentNullException(paramName);
+            }
+            if (count < 0 || count > value.Length)
+            {
+                throw new System.ArgumentOutOfRangeException(paramName, $"Count {count} must be between 0 and array length {value.Length}.");
+            }
+            if (count == 0)
+            {
+                return System.IntPtr.Zero;
+            }
+
+            System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * count);
+            System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, count);
+            return ptr;
+        }
+
+        public static int[] NativeToNewIntArrayFixed(System.IntPtr ptr, int expectedLength)
+        {
+            int[] value = new int[expectedLength];
+            if (ptr != System.IntPtr.Zero)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(ptr, value, 0, expectedLength);
+            }
+            return value;
+        }
+
+        public static void NativeToExistingIntArrayFixed(System.IntPtr ptr, int[] target, int expectedLength)
+        {
+            if (ptr == System.IntPtr.Zero)
+            {
+                return;
+            }
+            if (target == null || target.Length != expectedLength)
+            {
+                throw new System.ArgumentException($"Expected array length {expectedLength}", nameof(target));
+            }
+            System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, expectedLength);
+        }
+
+        public static void NativeToExistingIntArrayCounted(System.IntPtr ptr, int[] target, int count, string paramName)
+        {
+            if (target == null)
+            {
+                throw new System.ArgumentNullException(paramName);
+            }
+            if (count < 0 || count > target.Length)
+            {
+                throw new System.ArgumentOutOfRangeException(paramName, $"Count {count} must be between 0 and array length {target.Length}.");
+            }
+            if (ptr == System.IntPtr.Zero || count == 0)
+            {
+                return;
+            }
+            System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, count);
+        }
+
+        public static void FreeNativeBuffer(System.IntPtr ptr)
+        {
+            if (ptr != System.IntPtr.Zero)
+            {
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+            }
+        }
+    }
+)" );
 
     generated_files.push_back(write_csharp_file(output_root, "csbind23.array.g.cs", shared.str()));
 }
