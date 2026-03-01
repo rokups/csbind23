@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace csbind23::emit
@@ -189,6 +190,112 @@ const ClassDecl* find_class_by_cpp_name(const ModuleDecl& module_decl, std::stri
         }
     }
     return nullptr;
+}
+
+const ClassDecl* primary_base_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    if (!class_decl.base_classes.empty())
+    {
+        return find_class_by_cpp_name(module_decl, class_decl.base_classes.front().cpp_name);
+    }
+
+    if (!class_decl.base_cpp_name.empty())
+    {
+        return find_class_by_cpp_name(module_decl, class_decl.base_cpp_name);
+    }
+
+    return nullptr;
+}
+
+std::vector<const ClassDecl*> secondary_base_classes(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    std::vector<const ClassDecl*> bases;
+    if (!class_decl.base_classes.empty())
+    {
+        for (std::size_t index = 1; index < class_decl.base_classes.size(); ++index)
+        {
+            const auto* base_class = find_class_by_cpp_name(module_decl, class_decl.base_classes[index].cpp_name);
+            if (base_class != nullptr)
+            {
+                bases.push_back(base_class);
+            }
+        }
+    }
+    return bases;
+}
+
+bool is_wrapper_visible_method(const FunctionDecl& method_decl)
+{
+    return !method_decl.is_constructor && method_decl.is_method && !method_decl.is_property_getter
+        && !method_decl.is_property_setter;
+}
+
+std::string method_signature_key(const FunctionDecl& method_decl)
+{
+    std::string key = method_decl.name;
+    key += method_decl.is_const ? "|const|" : "|mutable|";
+    key += method_decl.return_type.pinvoke_name;
+    key += "|";
+    for (const auto& parameter : method_decl.parameters)
+    {
+        key += parameter.type.pinvoke_name;
+        key += parameter.type.is_const ? "#c" : "#m";
+        key += parameter.type.is_pointer ? "#p" : "#v";
+        key += parameter.type.is_reference ? "#r" : "#v";
+        key += ";";
+    }
+    return key;
+}
+
+struct EmittedMethod
+{
+    FunctionDecl method;
+    bool inherited_from_secondary_base = false;
+};
+
+std::vector<EmittedMethod> collect_emitted_methods(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    std::vector<EmittedMethod> emitted_methods;
+    emitted_methods.reserve(class_decl.methods.size());
+
+    std::unordered_set<std::string> signatures;
+    for (const auto& method_decl : class_decl.methods)
+    {
+        if (method_decl.is_constructor || !method_decl.is_method)
+        {
+            continue;
+        }
+
+        if (is_wrapper_visible_method(method_decl))
+        {
+            signatures.insert(method_signature_key(method_decl));
+        }
+        emitted_methods.push_back(EmittedMethod{method_decl, false});
+    }
+
+    for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
+    {
+        for (const auto& base_method : secondary_base->methods)
+        {
+            if (!is_wrapper_visible_method(base_method))
+            {
+                continue;
+            }
+
+            const std::string signature = method_signature_key(base_method);
+            if (signatures.contains(signature))
+            {
+                continue;
+            }
+
+            signatures.insert(signature);
+            FunctionDecl inherited_method = base_method;
+            inherited_method.class_name = secondary_base->cpp_name;
+            emitted_methods.push_back(EmittedMethod{std::move(inherited_method), true});
+        }
+    }
+
+    return emitted_methods;
 }
 
 const ClassDecl* find_pointer_class_return(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
@@ -408,24 +515,72 @@ std::string parameter_list_without_self(const FunctionDecl& function_decl)
     return rendered;
 }
 
-std::vector<const FunctionDecl*> collect_virtual_methods(const ClassDecl& class_decl)
+std::vector<const FunctionDecl*> collect_virtual_methods(
+    const ClassDecl& class_decl, const std::vector<EmittedMethod>& emitted_methods)
 {
     std::vector<const FunctionDecl*> methods;
-    if (!class_decl.enable_virtual_overrides)
+    for (const auto& emitted_method : emitted_methods)
     {
-        return methods;
-    }
-
-    for (const auto& method_decl : class_decl.methods)
-    {
+        const auto& method_decl = emitted_method.method;
         if (method_decl.is_constructor || !method_decl.is_method || !method_decl.allow_override)
         {
             continue;
         }
-        methods.push_back(&method_decl);
+
+        if (!class_decl.enable_virtual_overrides && !emitted_method.inherited_from_secondary_base)
+        {
+            continue;
+        }
+
+        methods.push_back(&emitted_method.method);
     }
 
     return methods;
+}
+
+std::string interface_name_for_class(const ClassDecl& class_decl)
+{
+    return "I" + class_decl.name;
+}
+
+bool is_primary_base_for_any_class(const ModuleDecl& module_decl, const ClassDecl& candidate)
+{
+    for (const auto& class_decl : module_decl.classes)
+    {
+        if (class_decl.cpp_name == candidate.cpp_name)
+        {
+            continue;
+        }
+
+        const auto* primary_base = primary_base_class(module_decl, class_decl);
+        if (primary_base != nullptr && primary_base->cpp_name == candidate.cpp_name)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void append_interface_declaration(TextWriter& output, const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    output.append_line_format("public interface {}", interface_name_for_class(class_decl));
+    output.append_line("{");
+    for (const auto& method_decl : class_decl.methods)
+    {
+        if (!is_wrapper_visible_method(method_decl))
+        {
+            continue;
+        }
+
+        output.append_line_format(
+            "    {} {}({});",
+            wrapper_return_type(module_decl, method_decl),
+            method_decl.name,
+            parameter_list_without_self(method_decl));
+    }
+    output.append_line("}");
+    output.append_line();
 }
 
 std::string callback_delegate_name(const FunctionDecl& method_decl, std::size_t index)
@@ -1025,18 +1180,42 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 
 void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl)
 {
-    const ClassDecl* base_class = class_decl.base_cpp_name.empty() ? nullptr : find_class_by_cpp_name(module_decl, class_decl.base_cpp_name);
+    const ClassDecl* base_class = primary_base_class(module_decl, class_decl);
     const bool has_base_class = base_class != nullptr;
     const bool emits_destroy = class_has_owned_ctor(class_decl);
-    const auto virtual_methods = collect_virtual_methods(class_decl);
+    const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+    const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
     const bool has_virtual_support = !virtual_methods.empty();
-    const std::string base_clause = has_base_class ? base_class->name : "System.IDisposable";
 
-    output.append_line_format(
-        "public {} class {} : {}",
-        has_virtual_support ? "partial" : "sealed",
-        class_decl.name,
-        base_clause);
+    std::vector<std::string> base_types;
+    if (has_base_class)
+    {
+        base_types.push_back(base_class->name);
+    }
+    else
+    {
+        base_types.push_back("System.IDisposable");
+    }
+    for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
+    {
+        base_types.push_back(interface_name_for_class(*secondary_base));
+    }
+
+    std::string base_clause;
+    for (std::size_t index = 0; index < base_types.size(); ++index)
+    {
+        if (index > 0)
+        {
+            base_clause += ", ";
+        }
+        base_clause += base_types[index];
+    }
+
+    const std::string class_declaration = has_virtual_support
+        ? "public partial class"
+        : (is_primary_base_for_any_class(module_decl, class_decl) ? "public class" : "public sealed class");
+
+    output.append_line_format("{} {} : {}", class_declaration, class_decl.name, base_clause);
     output.append_line("{");
     if (!has_base_class)
     {
@@ -1202,9 +1381,9 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         append_virtual_director_support(output, module_decl, module_name, class_decl, virtual_methods);
     }
 
-    for (std::size_t index = 0; index < class_decl.methods.size(); ++index)
+    for (std::size_t index = 0; index < emitted_methods.size(); ++index)
     {
-        const auto& method_decl = class_decl.methods[index];
+        const auto& method_decl = emitted_methods[index].method;
         if (method_decl.is_constructor)
         {
             continue;
@@ -1214,7 +1393,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         bool is_virtual = false;
         for (std::size_t i = 0; i < virtual_methods.size(); ++i)
         {
-            if (virtual_methods[i] == &method_decl)
+            if (virtual_methods[i] == &emitted_methods[index].method)
             {
                 is_virtual = true;
                 virtual_index = i;
@@ -1303,6 +1482,27 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::vector<std::filesystem::path> generated_files;
     emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
 
+    std::unordered_set<std::string> emitted_interfaces;
+    for (const auto& class_decl : module_decl.classes)
+    {
+        for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
+        {
+            if (!emitted_interfaces.insert(secondary_base->cpp_name).second)
+            {
+                continue;
+            }
+
+            TextWriter interface_file(512);
+            interface_file.append_line("namespace CsBind23.Generated;");
+            interface_file.append_line();
+            append_interface_declaration(interface_file, module_decl, *secondary_base);
+            generated_files.push_back(write_csharp_file(
+                output_root,
+                module_decl.name + "." + interface_name_for_class(*secondary_base) + ".g.cs",
+                interface_file.str()));
+        }
+    }
+
     TextWriter generated(3072);
 
     generated.append_line("namespace CsBind23.Generated;");
@@ -1318,7 +1518,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto virtual_methods = collect_virtual_methods(class_decl);
+        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+        const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
 
         FunctionDecl type_name_decl;
         type_name_decl.return_type.c_abi_name = "int";
@@ -1361,16 +1562,18 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     generated, method_decl, module_decl.pinvoke_library,
                     module_decl.name + "_" + class_decl.name + "_create", false);
             }
-            else
+        }
+
+        for (const auto& emitted_method : emitted_methods)
+        {
+            const auto& method_decl = emitted_method.method;
+            append_native_signature(generated, method_decl, module_decl.pinvoke_library,
+                module_decl.name + "_" + class_decl.name + "_" + method_decl.name, true);
+
+            if (!virtual_methods.empty() && method_decl.allow_override)
             {
                 append_native_signature(generated, method_decl, module_decl.pinvoke_library,
-                    module_decl.name + "_" + class_decl.name + "_" + method_decl.name, true);
-
-                if (!virtual_methods.empty() && method_decl.allow_override)
-                {
-                    append_native_signature(generated, method_decl, module_decl.pinvoke_library,
-                        module_decl.name + "_" + class_decl.name + "_" + method_decl.name + "__base", true);
-                }
+                    module_decl.name + "_" + class_decl.name + "_" + method_decl.name + "__base", true);
             }
         }
     }

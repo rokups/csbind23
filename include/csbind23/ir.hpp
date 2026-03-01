@@ -106,10 +106,17 @@ inline Ownership infer_ownership(const FunctionDecl& function_decl)
 
 struct ClassDecl
 {
+    struct BaseClassDecl
+    {
+        std::string name;
+        std::string cpp_name;
+    };
+
     std::string name;
     std::string cpp_name;
     std::string base_name;
     std::string base_cpp_name;
+    std::vector<BaseClassDecl> base_classes;
     bool enable_virtual_overrides = false;
     std::vector<FunctionDecl> methods;
     std::vector<PropertyDecl> properties;

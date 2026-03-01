@@ -6,6 +6,8 @@
 #include <format>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace csbind23::emit
@@ -117,21 +119,127 @@ void append_free_function_body(TextWriter& output, const FunctionDecl& function_
         "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(function_decl.return_type));
 }
 
-std::vector<const FunctionDecl*> collect_virtual_methods(const ClassDecl& class_decl)
+const ClassDecl* find_class_by_cpp_name(const ModuleDecl& module_decl, std::string_view cpp_name)
 {
-    std::vector<const FunctionDecl*> methods;
-    if (!class_decl.enable_virtual_overrides)
+    for (const auto& class_decl : module_decl.classes)
     {
-        return methods;
+        if (class_decl.cpp_name == cpp_name)
+        {
+            return &class_decl;
+        }
     }
+    return nullptr;
+}
 
+std::vector<const ClassDecl*> secondary_base_classes(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    std::vector<const ClassDecl*> bases;
+    if (!class_decl.base_classes.empty())
+    {
+        for (std::size_t index = 1; index < class_decl.base_classes.size(); ++index)
+        {
+            const auto* base_class = find_class_by_cpp_name(module_decl, class_decl.base_classes[index].cpp_name);
+            if (base_class != nullptr)
+            {
+                bases.push_back(base_class);
+            }
+        }
+    }
+    return bases;
+}
+
+bool is_wrapper_visible_method(const FunctionDecl& method_decl)
+{
+    return !method_decl.is_constructor && method_decl.is_method && !method_decl.is_property_getter
+        && !method_decl.is_property_setter;
+}
+
+std::string method_signature_key(const FunctionDecl& method_decl)
+{
+    std::string key = method_decl.name;
+    key += method_decl.is_const ? "|const|" : "|mutable|";
+    key += method_decl.return_type.c_abi_name;
+    key += "|";
+    for (const auto& parameter : method_decl.parameters)
+    {
+        key += parameter.type.c_abi_name;
+        key += parameter.type.is_const ? "#c" : "#m";
+        key += parameter.type.is_pointer ? "#p" : "#v";
+        key += parameter.type.is_reference ? "#r" : "#v";
+        key += ";";
+    }
+    return key;
+}
+
+struct EmittedMethod
+{
+    FunctionDecl method;
+    bool inherited_from_secondary_base = false;
+};
+
+std::vector<EmittedMethod> collect_emitted_methods(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    std::vector<EmittedMethod> emitted_methods;
+    emitted_methods.reserve(class_decl.methods.size());
+
+    std::unordered_set<std::string> signatures;
     for (const auto& method_decl : class_decl.methods)
     {
+        if (method_decl.is_constructor || !method_decl.is_method)
+        {
+            continue;
+        }
+
+        if (is_wrapper_visible_method(method_decl))
+        {
+            signatures.insert(method_signature_key(method_decl));
+        }
+        emitted_methods.push_back(EmittedMethod{method_decl, false});
+    }
+
+    for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
+    {
+        for (const auto& base_method : secondary_base->methods)
+        {
+            if (!is_wrapper_visible_method(base_method))
+            {
+                continue;
+            }
+
+            const std::string signature = method_signature_key(base_method);
+            if (signatures.contains(signature))
+            {
+                continue;
+            }
+
+            signatures.insert(signature);
+            FunctionDecl inherited_method = base_method;
+            inherited_method.class_name = secondary_base->cpp_name;
+            emitted_methods.push_back(EmittedMethod{std::move(inherited_method), true});
+        }
+    }
+
+    return emitted_methods;
+}
+
+std::vector<const FunctionDecl*> collect_virtual_methods(
+    const ClassDecl& class_decl, const std::vector<EmittedMethod>& emitted_methods)
+{
+    std::vector<const FunctionDecl*> methods;
+    for (const auto& emitted_method : emitted_methods)
+    {
+        const auto& method_decl = emitted_method.method;
         if (method_decl.is_constructor || !method_decl.is_method || !method_decl.allow_override)
         {
             continue;
         }
-        methods.push_back(&method_decl);
+
+        if (!class_decl.enable_virtual_overrides && !emitted_method.inherited_from_secondary_base)
+        {
+            continue;
+        }
+
+        methods.push_back(&emitted_method.method);
     }
 
     return methods;
@@ -174,6 +282,9 @@ void append_virtual_callback_table(TextWriter& output, const std::string& module
 void append_director_method_override(TextWriter& output, const ClassDecl& class_decl, const std::string& module_name,
     const FunctionDecl& method_decl)
 {
+    (void)module_name;
+    const std::string owner_class_name = method_decl.class_name.empty() ? class_decl.cpp_name : method_decl.class_name;
+
     output.append_format("    {} {}(", render_cpp_type(method_decl.return_type), method_decl.cpp_symbol);
 
     for (std::size_t index = 0; index < method_decl.parameters.size(); ++index)
@@ -240,13 +351,13 @@ void append_director_method_override(TextWriter& output, const ClassDecl& class_
 
     if (method_decl.return_type.c_abi_name == "void")
     {
-        output.append_line_format("        {}::{}({});", class_decl.cpp_name, method_decl.cpp_symbol, base_call_args);
+        output.append_line_format("        {}::{}({});", owner_class_name, method_decl.cpp_symbol, base_call_args);
         output.append_line("    }");
         output.append_line();
         return;
     }
 
-    output.append_line_format("        return {}::{}({});", class_decl.cpp_name, method_decl.cpp_symbol, base_call_args);
+    output.append_line_format("        return {}::{}({});", owner_class_name, method_decl.cpp_symbol, base_call_args);
     output.append_line("    }");
     output.append_line();
 }
@@ -348,8 +459,9 @@ void append_method_body(
     append_converted_arguments(output, method_decl.parameters);
 
     const std::string call_arguments = render_call_arguments(method_decl.parameters);
+    const std::string owner_class_name = method_decl.class_name.empty() ? class_decl.cpp_name : method_decl.class_name;
     const std::string method_expr = explicit_base_call
-        ? std::format("{}::{}", class_decl.cpp_name, method_decl.cpp_symbol)
+        ? std::format("{}::{}", owner_class_name, method_decl.cpp_symbol)
         : method_decl.cpp_symbol;
 
     if (method_decl.return_type.c_abi_name == "void")
@@ -447,7 +559,8 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto virtual_methods = collect_virtual_methods(class_decl);
+        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+        const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
         const bool has_virtual_director = !virtual_methods.empty();
 
         std::size_t class_type_id = 0;
@@ -543,32 +656,29 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
         for (const auto& method_decl : class_decl.methods)
         {
-            const std::string exported_name = method_decl.is_constructor
-                ? module_decl.name + "_" + class_decl.name + "_create"
-                : module_decl.name + "_" + class_decl.name + "_" + method_decl.name;
-
             if (method_decl.is_constructor)
             {
+                const std::string exported_name = module_decl.name + "_" + class_decl.name + "_create";
                 append_function_signature(generated, method_decl, exported_name);
-            }
-            else
-            {
-                append_method_signature(generated, method_decl, exported_name);
-            }
-
-            generated.append_line(" {");
-            if (method_decl.is_constructor)
-            {
+                generated.append_line(" {");
                 append_constructor_body(generated, module_decl.name, class_decl, method_decl, has_virtual_director);
+                generated.append_line("}");
+                generated.append_line();
             }
-            else
-            {
-                append_method_body(generated, class_decl, method_decl, false);
-            }
+        }
+
+        for (const auto& emitted_method : emitted_methods)
+        {
+            const auto& method_decl = emitted_method.method;
+            const std::string exported_name = module_decl.name + "_" + class_decl.name + "_" + method_decl.name;
+
+            append_method_signature(generated, method_decl, exported_name);
+            generated.append_line(" {");
+            append_method_body(generated, class_decl, method_decl, false);
             generated.append_line("}");
             generated.append_line();
 
-            if (has_virtual_director && method_decl.allow_override && !method_decl.is_constructor)
+            if (has_virtual_director && method_decl.allow_override)
             {
                 append_method_signature(generated, method_decl, exported_name + "__base");
                 generated.append_line(" {");

@@ -191,7 +191,7 @@ public:
         return def_impl(name, function_ptr, return_ownership, cpp_symbol);
     }
 
-    template <typename ClassType, typename BaseType = void>
+    template <typename ClassType, typename... BaseTypes>
     ClassBuilder class_(std::string_view name = detail::unqualified_type_name<ClassType>(),
         std::string_view cpp_name = detail::qualified_type_name<ClassType>());
 
@@ -504,16 +504,22 @@ private:
     EnumDecl* enum_decl_;
 };
 
-template <typename ClassType, typename BaseType>
+template <typename ClassType, typename... BaseTypes>
 ClassBuilder ModuleBuilder::class_(std::string_view name, std::string_view cpp_name)
 {
     ClassDecl class_decl;
     class_decl.name = std::string(name);
     class_decl.cpp_name = std::string(cpp_name);
-    if constexpr (!std::is_same_v<BaseType, void>)
+    auto add_base = [&class_decl]<typename BaseType>() {
+        class_decl.base_classes.push_back(
+            ClassDecl::BaseClassDecl{detail::unqualified_type_name<BaseType>(), detail::qualified_type_name<BaseType>()});
+    };
+    (add_base.template operator()<BaseTypes>(), ...);
+
+    if (!class_decl.base_classes.empty())
     {
-        class_decl.base_name = detail::unqualified_type_name<BaseType>();
-        class_decl.base_cpp_name = detail::qualified_type_name<BaseType>();
+        class_decl.base_name = class_decl.base_classes.front().name;
+        class_decl.base_cpp_name = class_decl.base_classes.front().cpp_name;
     }
     module_decl_->classes.push_back(std::move(class_decl));
     return ClassBuilder(*owner_, module_decl_->classes.back());
