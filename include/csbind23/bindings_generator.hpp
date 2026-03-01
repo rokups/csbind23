@@ -128,43 +128,87 @@ public:
 
     template <auto Function> ModuleBuilder& def(Ownership return_ownership = Ownership::Auto)
     {
-        return def_from_constant(detail::function_export_name<Function>(), Function, return_ownership,
+        return def_from_constant(detail::function_export_name<Function>(), Function, return_ownership, 0,
             detail::function_symbol_name<Function>());
     }
 
     template <auto Function> ModuleBuilder& def(std::string_view name, Ownership return_ownership = Ownership::Auto)
     {
-        return def_from_constant(name, Function, return_ownership, detail::function_symbol_name<Function>());
+        return def_from_constant(name, Function, return_ownership, 0, detail::function_symbol_name<Function>());
+    }
+
+    template <auto Function>
+    ModuleBuilder& def_with_defaults(std::size_t trailing_default_argument_count,
+        Ownership return_ownership = Ownership::Auto)
+    {
+        return def_from_constant(detail::function_export_name<Function>(), Function, return_ownership,
+            trailing_default_argument_count, detail::function_symbol_name<Function>());
+    }
+
+    template <auto Function>
+    ModuleBuilder& def_with_defaults(std::string_view name, std::size_t trailing_default_argument_count,
+        Ownership return_ownership = Ownership::Auto)
+    {
+        return def_from_constant(
+            name, Function, return_ownership, trailing_default_argument_count, detail::function_symbol_name<Function>());
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...))
     {
-        return def_impl(name, function_ptr, Ownership::Auto, {});
+        return def_impl(name, function_ptr, Ownership::Auto, 0, {});
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), std::string_view cpp_symbol)
     {
-        return def_impl(name, function_ptr, Ownership::Auto, cpp_symbol);
+        return def_impl(name, function_ptr, Ownership::Auto, 0, cpp_symbol);
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership)
     {
-        return def_impl(name, function_ptr, return_ownership, {});
+        return def_impl(name, function_ptr, return_ownership, 0, {});
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
         std::string_view cpp_symbol)
     {
-        return def_impl(name, function_ptr, return_ownership, cpp_symbol);
+        return def_impl(name, function_ptr, return_ownership, 0, cpp_symbol);
+    }
+
+    template <typename ReturnType, typename... Args>
+    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
+        std::size_t trailing_default_argument_count)
+    {
+        return def_impl(name, function_ptr, Ownership::Auto, trailing_default_argument_count, {});
+    }
+
+    template <typename ReturnType, typename... Args>
+    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
+        std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
+    {
+        return def_impl(name, function_ptr, Ownership::Auto, trailing_default_argument_count, cpp_symbol);
+    }
+
+    template <typename ReturnType, typename... Args>
+    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
+        Ownership return_ownership, std::size_t trailing_default_argument_count)
+    {
+        return def_impl(name, function_ptr, return_ownership, trailing_default_argument_count, {});
+    }
+
+    template <typename ReturnType, typename... Args>
+    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
+        Ownership return_ownership, std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
+    {
+        return def_impl(name, function_ptr, return_ownership, trailing_default_argument_count, cpp_symbol);
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def_impl(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
-        std::string_view cpp_symbol)
+        std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
     {
         (void)function_ptr;
 
@@ -173,6 +217,8 @@ public:
         function_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
         function_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
         function_decl.return_ownership = return_ownership;
+        function_decl.trailing_default_argument_count =
+            trailing_default_argument_count > sizeof...(Args) ? sizeof...(Args) : trailing_default_argument_count;
 
         function_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
@@ -186,9 +232,9 @@ public:
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def_from_constant(std::string_view name, ReturnType (*function_ptr)(Args...),
-        Ownership return_ownership, std::string_view cpp_symbol)
+        Ownership return_ownership, std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
     {
-        return def_impl(name, function_ptr, return_ownership, cpp_symbol);
+        return def_impl(name, function_ptr, return_ownership, trailing_default_argument_count, cpp_symbol);
     }
 
     template <typename ClassType, typename... BaseTypes>
@@ -250,7 +296,7 @@ public:
         Ownership return_ownership = Ownership::Auto)
     {
         (void)method_ptr;
-        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership);
+        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership, 0);
         return *this;
     }
 
@@ -259,7 +305,7 @@ public:
         Ownership return_ownership = Ownership::Auto)
     {
         (void)method_ptr;
-        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership);
+        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership, 0);
         return *this;
     }
 
@@ -280,7 +326,7 @@ public:
     {
         (void)method_ptr;
         class_decl_->enable_virtual_overrides = true;
-        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership, true);
+        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership, 0, true);
         return *this;
     }
 
@@ -290,7 +336,7 @@ public:
     {
         (void)method_ptr;
         class_decl_->enable_virtual_overrides = true;
-        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership, true);
+        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership, 0, true);
         return *this;
     }
 
@@ -316,7 +362,7 @@ public:
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
-        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, false,
+        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, 0, false,
             true, false, getter_cpp_symbol);
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -334,7 +380,7 @@ public:
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
-        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, false,
+        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, 0, false,
             true, false, getter_cpp_symbol);
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -351,7 +397,7 @@ public:
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
-        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, false,
+        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, 0, false,
             true, false, std::string(name));
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -368,7 +414,7 @@ public:
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
-        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, false,
+        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, 0, false,
             true, false, std::string(name));
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -411,9 +457,9 @@ public:
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
         property_decl.setter_name = std::string("__csbind23_propset_") + std::string(name);
 
-        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, false,
+        add_method<ClassType, ReturnType>(property_decl.getter_name, true, Ownership::Auto, 0, false,
             true, false, getter_cpp_symbol);
-        add_method<ClassType, void, SetterArg>(property_decl.setter_name, false, Ownership::Auto, false,
+        add_method<ClassType, void, SetterArg>(property_decl.setter_name, false, Ownership::Auto, 0, false,
             false, true, setter_cpp_symbol);
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -436,9 +482,9 @@ public:
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
         property_decl.setter_name = std::string("__csbind23_propset_") + std::string(name);
 
-        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, false,
+        add_method<ClassType, ReturnType>(property_decl.getter_name, false, Ownership::Auto, 0, false,
             true, false, getter_cpp_symbol);
-        add_method<ClassType, void, SetterArg>(property_decl.setter_name, false, Ownership::Auto, false,
+        add_method<ClassType, void, SetterArg>(property_decl.setter_name, false, Ownership::Auto, 0, false,
             false, true, setter_cpp_symbol);
 
         class_decl_->properties.push_back(std::move(property_decl));
@@ -447,7 +493,8 @@ public:
 
 private:
     template <typename ClassType, typename ReturnType, typename... Args>
-    void add_method(std::string_view name, bool is_const, Ownership return_ownership, bool allow_override = false,
+    void add_method(std::string_view name, bool is_const, Ownership return_ownership,
+        std::size_t trailing_default_argument_count = 0, bool allow_override = false,
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {})
     {
         FunctionDecl method_decl;
@@ -455,6 +502,7 @@ private:
         method_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
         method_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
         method_decl.return_ownership = return_ownership;
+        method_decl.trailing_default_argument_count = trailing_default_argument_count;
         method_decl.is_method = true;
         method_decl.is_const = is_const;
         method_decl.is_virtual = allow_override;

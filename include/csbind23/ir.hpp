@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -48,6 +49,7 @@ struct FunctionDecl
     std::string cpp_symbol;
     TypeRef return_type;
     std::vector<ParameterDecl> parameters;
+    std::size_t trailing_default_argument_count = 0;
     Ownership return_ownership = Ownership::Auto;
 
     bool is_constructor = false;

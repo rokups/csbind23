@@ -6,9 +6,9 @@
 #include <format>
 #include <fstream>
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <limits>
 #include <unordered_set>
 #include <vector>
 
@@ -168,6 +168,15 @@ std::string parameter_call_argument(const ParameterDecl& parameter)
         return "ref " + parameter.name;
     }
     return parameter.name;
+}
+
+std::string parameter_call_argument(const ParameterDecl& parameter, std::string_view argument_expression)
+{
+    if (parameter_is_direct_ref(parameter))
+    {
+        return "ref " + std::string(argument_expression);
+    }
+    return std::string(argument_expression);
 }
 
 std::string reflection_parameter_type_expression(const ParameterDecl& parameter)
@@ -467,6 +476,77 @@ std::string join_arguments(const std::vector<std::string>& arguments)
     return rendered;
 }
 
+std::string default_variant_condition(std::size_t omitted, const std::vector<std::string>& has_value_expressions)
+{
+    const std::size_t optional_count = has_value_expressions.size();
+    std::string condition;
+    for (std::size_t index = 0; index < optional_count; ++index)
+    {
+        const bool should_be_present = index < (optional_count - omitted);
+        if (!condition.empty())
+        {
+            condition += " && ";
+        }
+        if (should_be_present)
+        {
+            condition += has_value_expressions[index];
+        }
+        else
+        {
+            condition += "!(" + has_value_expressions[index] + ")";
+        }
+    }
+
+    return condition.empty() ? "true" : condition;
+}
+
+void append_default_variant_if_chain(TextWriter& output, std::string_view indent, const std::string& module_name,
+    const std::string& native_name, const std::vector<std::string>& call_arguments, std::size_t defaults,
+    const std::vector<std::string>& has_value_expressions, std::string_view assign_target, bool emit_return)
+{
+    for (std::size_t omitted = 0; omitted <= defaults; ++omitted)
+    {
+        const std::size_t count = call_arguments.size() - omitted;
+        std::vector<std::string> prefix_args(call_arguments.begin(), call_arguments.begin() + count);
+        const std::string call_arguments_rendered = join_arguments(prefix_args);
+        const std::string variant_name =
+            omitted == 0 ? native_name : native_name + std::format("__default_{}", omitted);
+        const std::string variant_call = std::format("{}Native.{}({})", module_name, variant_name, call_arguments_rendered);
+        const std::string condition = default_variant_condition(omitted, has_value_expressions);
+
+        if (omitted == 0)
+        {
+            output.append_line_format("{}if ({})", indent, condition);
+        }
+        else
+        {
+            output.append_line_format("{}else if ({})", indent, condition);
+        }
+        output.append_line_format("{}{{", indent);
+
+        if (emit_return)
+        {
+            output.append_line_format("{}    return {} ;", indent, variant_call);
+        }
+        else if (!assign_target.empty())
+        {
+            output.append_line_format("{}    {} = {} ;", indent, assign_target, variant_call);
+        }
+        else
+        {
+            output.append_line_format("{}    {} ;", indent, variant_call);
+        }
+
+        output.append_line_format("{}}}", indent);
+    }
+
+    output.append_line_format("{}else", indent);
+    output.append_line_format("{}{{", indent);
+    output.append_line_format(
+        "{}    throw new System.ArgumentException(\"Optional arguments must be omitted from right to left.\");", indent);
+    output.append_line_format("{}}}", indent);
+}
+
 std::string csharp_api_class_name(const ModuleDecl& module_decl)
 {
     if (!module_decl.csharp_api_class.empty())
@@ -513,6 +593,129 @@ std::string parameter_list_without_self(const FunctionDecl& function_decl)
         }
     }
     return rendered;
+}
+
+bool csharp_type_is_value_type(const ModuleDecl& module_decl, std::string_view type_name)
+{
+    if (type_name == "bool" || type_name == "byte" || type_name == "sbyte" || type_name == "short"
+        || type_name == "ushort" || type_name == "int" || type_name == "uint" || type_name == "long"
+        || type_name == "ulong" || type_name == "nint" || type_name == "nuint" || type_name == "float"
+        || type_name == "double" || type_name == "char")
+    {
+        return true;
+    }
+
+    for (const auto& enum_decl : module_decl.enums)
+    {
+        if (enum_decl.name == type_name)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool parameter_can_be_nullable_optional(const ParameterDecl& parameter)
+{
+    return !parameter_is_ref(parameter) && parameter.type.managed_to_pinvoke_expression.empty()
+        && parameter.type.managed_finalize_to_pinvoke_statement.empty();
+}
+
+std::size_t free_function_default_count(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+{
+    (void)module_decl;
+    const std::size_t declared = function_decl.trailing_default_argument_count > function_decl.parameters.size()
+        ? function_decl.parameters.size()
+        : function_decl.trailing_default_argument_count;
+
+    std::size_t effective = 0;
+    for (std::size_t offset = 0; offset < declared; ++offset)
+    {
+        const auto& parameter = function_decl.parameters[function_decl.parameters.size() - 1 - offset];
+        if (!parameter_can_be_nullable_optional(parameter))
+        {
+            break;
+        }
+        ++effective;
+    }
+
+    return effective;
+}
+
+bool is_nullable_optional_parameter(const ModuleDecl& module_decl, const FunctionDecl& function_decl, std::size_t index)
+{
+    const std::size_t defaults = free_function_default_count(module_decl, function_decl);
+    if (defaults == 0 || index >= function_decl.parameters.size())
+    {
+        return false;
+    }
+
+    return index >= (function_decl.parameters.size() - defaults);
+}
+
+std::string parameter_type_for_public_signature(
+    const ModuleDecl& module_decl, const FunctionDecl& function_decl, const ParameterDecl& parameter, std::size_t index)
+{
+    std::string type_name = wrapper_type_name(parameter.type);
+    if (!is_nullable_optional_parameter(module_decl, function_decl, index))
+    {
+        return type_name;
+    }
+
+    type_name += "?";
+    return type_name;
+}
+
+std::string free_function_parameter_list(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+{
+    std::string rendered;
+    for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
+    {
+        const auto& parameter = function_decl.parameters[index];
+        const bool is_ref = parameter_is_ref(parameter);
+        rendered += std::format("{}{} {}", is_ref ? "ref " : "",
+            parameter_type_for_public_signature(module_decl, function_decl, parameter, index), parameter.name);
+        if (index + 1 < function_decl.parameters.size())
+        {
+            rendered += ", ";
+        }
+    }
+    return rendered;
+}
+
+std::string nullable_parameter_unwrap_expression(
+    const ModuleDecl& module_decl, const FunctionDecl& function_decl, const ParameterDecl& parameter, std::size_t index)
+{
+    if (!is_nullable_optional_parameter(module_decl, function_decl, index))
+    {
+        return parameter.name;
+    }
+
+    const std::string wrapper_type = wrapper_type_name(parameter.type);
+    if (csharp_type_is_value_type(module_decl, wrapper_type))
+    {
+        return parameter.name + ".Value";
+    }
+
+    return parameter.name + "!";
+}
+
+std::string optional_parameter_has_value_expression(
+    const ModuleDecl& module_decl, const FunctionDecl& function_decl, const ParameterDecl& parameter, std::size_t index)
+{
+    if (!is_nullable_optional_parameter(module_decl, function_decl, index))
+    {
+        return "true";
+    }
+
+    const std::string wrapper_type = wrapper_type_name(parameter.type);
+    if (csharp_type_is_value_type(module_decl, wrapper_type))
+    {
+        return parameter.name + ".HasValue";
+    }
+
+    return parameter.name + " != null";
 }
 
 std::vector<const FunctionDecl*> collect_virtual_methods(
@@ -583,6 +786,21 @@ void append_interface_declaration(TextWriter& output, const ModuleDecl& module_d
     output.append_line();
 }
 
+bool module_has_virtual_callbacks(const ModuleDecl& module_decl)
+{
+    for (const auto& class_decl : module_decl.classes)
+    {
+        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+        const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
+        if (!virtual_methods.empty())
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 std::string callback_delegate_name(const FunctionDecl& method_decl, std::size_t index)
 {
     return std::format("__csbind23_CallbackDelegate{}_{}", index, method_decl.virtual_slot_name);
@@ -623,7 +841,8 @@ std::string virtual_mask_test_expression(std::string_view instance_prefix, std::
 }
 
 void append_native_signature(TextWriter& output, const FunctionDecl& function_decl, std::string_view pinvoke_library,
-    const std::string& exported_name, bool include_self)
+    const std::string& exported_name, bool include_self,
+    std::size_t parameter_count = std::numeric_limits<std::size_t>::max())
 {
     output.append_line_format(
         "    [System.Runtime.InteropServices.DllImport(\"{}\", CallingConvention = "
@@ -638,8 +857,12 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
         needs_separator = true;
     }
 
-    for (const auto& parameter : function_decl.parameters)
+    const std::size_t count = parameter_count > function_decl.parameters.size()
+        ? function_decl.parameters.size()
+        : parameter_count;
+    for (std::size_t index = 0; index < count; ++index)
     {
+        const auto& parameter = function_decl.parameters[index];
         if (needs_separator)
         {
             output.append(", ");
@@ -914,34 +1137,6 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
     }
     output.append_line();
 
-    output.append_line("    private static ulong __csbind23_SwigDerivedClassHasMethod(");
-    output.append_line("        object instance,");
-    output.append_line("        string methodName,");
-    output.append_line("        System.Type classType,");
-    output.append_line("        System.Type[] methodTypes,");
-    output.append_line("        ulong derivedFlag)");
-    output.append_line("    {");
-    output.append_line("        var methodInfo = instance.GetType().GetMethod(");
-    output.append_line("            methodName,");
-    output.append_line("            System.Reflection.BindingFlags.Public |");
-    output.append_line("            System.Reflection.BindingFlags.NonPublic |");
-    output.append_line("            System.Reflection.BindingFlags.Instance,");
-    output.append_line("            null,");
-    output.append_line("            methodTypes,");
-    output.append_line("            null);");
-    output.append_line("        if (methodInfo == null)");
-    output.append_line("        {");
-    output.append_line("            return 0UL;");
-    output.append_line("        }");
-    output.append_line();
-    output.append_line("        bool hasDerivedMethod = methodInfo.IsVirtual");
-    output.append_line("            && !methodInfo.IsAbstract");
-    output.append_line("            && (methodInfo.DeclaringType!.IsSubclassOf(classType) || methodInfo.DeclaringType == classType)");
-    output.append_line("            && methodInfo.DeclaringType != methodInfo.GetBaseDefinition().DeclaringType;");
-    output.append_line("        return hasDerivedMethod ? derivedFlag : 0UL;");
-    output.append_line("    }");
-    output.append_line();
-
     output.append_line("    private void __csbind23_InitializeDerivedOverrideFlags()");
     output.append_line("    {");
     for (std::size_t chunk = 0; chunk < mask_field_count; ++chunk)
@@ -953,8 +1148,9 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         const auto& method_decl = *virtual_methods[index];
         const std::size_t chunk = virtual_mask_chunk(index);
         output.append_line_format(
-            "        {} |= __csbind23_SwigDerivedClassHasMethod(this, \"{}\", typeof({}), __csbind23_methodTypes{}, {});",
+            "        {} |= {}.__csbind23_SwigDerivedClassHasMethod(this, \"{}\", typeof({}), __csbind23_methodTypes{}, {});",
             virtual_mask_field_name(chunk),
+            csharp_api_class_name(module_decl),
             method_decl.name,
             class_decl.name,
             index,
@@ -1514,6 +1710,18 @@ std::vector<std::filesystem::path> emit_csharp_module(
     {
         append_native_signature(generated, function_decl, module_decl.pinvoke_library,
             module_decl.name + "_" + function_decl.name, false);
+
+        const std::size_t defaults = free_function_default_count(module_decl, function_decl);
+        for (std::size_t omitted = 1; omitted <= defaults; ++omitted)
+        {
+            append_native_signature(
+                generated,
+                function_decl,
+                module_decl.pinvoke_library,
+                module_decl.name + "_" + function_decl.name + std::format("__default_{}", omitted),
+                false,
+                function_decl.parameters.size() - omitted);
+        }
     }
 
     for (const auto& class_decl : module_decl.classes)
@@ -1635,11 +1843,44 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     generated.append_line_format("public static class {}", csharp_api_class_name(module_decl));
     generated.append_line("{");
+    if (module_has_virtual_callbacks(module_decl))
+    {
+        generated.append_line("    internal static ulong __csbind23_SwigDerivedClassHasMethod(");
+        generated.append_line("        object instance,");
+        generated.append_line("        string methodName,");
+        generated.append_line("        System.Type classType,");
+        generated.append_line("        System.Type[] methodTypes,");
+        generated.append_line("        ulong derivedFlag)");
+        generated.append_line("    {");
+        generated.append_line("        var methodInfo = instance.GetType().GetMethod(");
+        generated.append_line("            methodName,");
+        generated.append_line("            System.Reflection.BindingFlags.Public |");
+        generated.append_line("            System.Reflection.BindingFlags.NonPublic |");
+        generated.append_line("            System.Reflection.BindingFlags.Instance,");
+        generated.append_line("            null,");
+        generated.append_line("            methodTypes,");
+        generated.append_line("            null);");
+        generated.append_line("        if (methodInfo == null)");
+        generated.append_line("        {");
+        generated.append_line("            return 0UL;");
+        generated.append_line("        }");
+        generated.append_line();
+        generated.append_line("        bool hasDerivedMethod = methodInfo.IsVirtual");
+        generated.append_line("            && !methodInfo.IsAbstract");
+        generated.append_line("            && (methodInfo.DeclaringType!.IsSubclassOf(classType) || methodInfo.DeclaringType == classType)");
+        generated.append_line("            && methodInfo.DeclaringType != methodInfo.GetBaseDefinition().DeclaringType;");
+        generated.append_line("        return hasDerivedMethod ? derivedFlag : 0UL;");
+        generated.append_line("    }");
+        generated.append_line();
+    }
+
     for (const auto& function_decl : module_decl.functions)
     {
-        const std::string params = parameter_list_without_self(function_decl);
+        const std::string params = free_function_parameter_list(module_decl, function_decl);
         const std::string return_type = wrapper_return_type(module_decl, function_decl);
         const std::string native_name = module_decl.name + "_" + function_decl.name;
+        const std::size_t defaults = free_function_default_count(module_decl, function_decl);
+        const std::size_t optional_start = function_decl.parameters.size() - defaults;
 
         generated.append_format("    public static {} {}(", return_type, function_decl.name);
         generated.append(params);
@@ -1652,6 +1893,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
         for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
         {
             const auto& parameter = function_decl.parameters[index];
+            const std::string managed_argument_expr =
+                nullable_parameter_unwrap_expression(module_decl, function_decl, parameter, index);
             if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
@@ -1659,23 +1902,37 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     generated,
                     "        ",
                     std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
-                    render_inline_template(parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name,
-                        parameter.name, module_decl.name));
+                    render_inline_template(parameter.type.managed_to_pinvoke_expression, managed_argument_expr, pinvoke_name,
+                        managed_argument_expr, module_decl.name));
                 call_arguments.push_back(pinvoke_name);
                 if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
-                        parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
+                        parameter.type.managed_finalize_to_pinvoke_statement, managed_argument_expr, pinvoke_name, pinvoke_name,
                         module_decl.name));
                 }
                 continue;
             }
 
-            call_arguments.push_back(parameter_call_argument(parameter));
+            call_arguments.push_back(parameter_call_argument(parameter, managed_argument_expr));
         }
 
-        const std::string call_arguments_rendered = join_arguments(call_arguments);
-        const std::string native_call = std::format("{}Native.{}({})", module_decl.name, native_name, call_arguments_rendered);
+        std::string native_call;
+        std::vector<std::string> default_variant_has_value_expressions;
+        if (defaults == 0)
+        {
+            const std::string call_arguments_rendered = join_arguments(call_arguments);
+            native_call = std::format("{}Native.{}({})", module_decl.name, native_name, call_arguments_rendered);
+        }
+        else
+        {
+            default_variant_has_value_expressions.reserve(defaults);
+            for (std::size_t index = optional_start; index < function_decl.parameters.size(); ++index)
+            {
+                default_variant_has_value_expressions.push_back(optional_parameter_has_value_expression(
+                    module_decl, function_decl, function_decl.parameters[index], index));
+            }
+        }
         const bool has_return_converter = !function_decl.return_type.managed_from_pinvoke_expression.empty();
         const bool has_return_finalize = !function_decl.return_type.managed_finalize_from_pinvoke_statement.empty();
         const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
@@ -1685,13 +1942,29 @@ std::vector<std::filesystem::path> emit_csharp_module(
         {
             if (!needs_finally)
             {
-                generated.append_line_format("        {};", native_call);
+                if (defaults == 0)
+                {
+                    generated.append_line_format("        {};", native_call);
+                }
+                else
+                {
+                    append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                        call_arguments, defaults, default_variant_has_value_expressions, "", false);
+                }
             }
             else
             {
                 generated.append_line("        try");
                 generated.append_line("        {");
-                generated.append_line_format("            {};", native_call);
+                if (defaults == 0)
+                {
+                    generated.append_line_format("            {};", native_call);
+                }
+                else
+                {
+                    append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                        call_arguments, defaults, default_variant_has_value_expressions, "", false);
+                }
                 generated.append_line("        }");
                 generated.append_line("        finally");
                 generated.append_line("        {");
@@ -1715,14 +1988,32 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
                 if (!needs_finally)
                 {
-                    generated.append_line_format("        System.IntPtr {} = {};", native_result_name, native_call);
+                    if (defaults == 0)
+                    {
+                        generated.append_line_format("        System.IntPtr {} = {};", native_result_name, native_call);
+                    }
+                    else
+                    {
+                        generated.append_line_format("        System.IntPtr {} = default!;", native_result_name);
+                        append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                            call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
+                    }
                     generated.append_line_format("        return {};", wrapped_result);
                 }
                 else
                 {
                     generated.append_line("        try");
                     generated.append_line("        {");
-                    generated.append_line_format("            System.IntPtr {} = {};", native_result_name, native_call);
+                    if (defaults == 0)
+                    {
+                        generated.append_line_format("            System.IntPtr {} = {};", native_result_name, native_call);
+                    }
+                    else
+                    {
+                        generated.append_line_format("            System.IntPtr {} = default!;", native_result_name);
+                        append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                            call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
+                    }
                     generated.append_line_format("            return {};", wrapped_result);
                     generated.append_line("        }");
                     generated.append_line("        finally");
@@ -1738,13 +2029,29 @@ std::vector<std::filesystem::path> emit_csharp_module(
             {
                 if (!needs_finally)
                 {
-                    generated.append_line_format("        return {};", native_call);
+                    if (defaults == 0)
+                    {
+                        generated.append_line_format("        return {};", native_call);
+                    }
+                    else
+                    {
+                        append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                            call_arguments, defaults, default_variant_has_value_expressions, "", true);
+                    }
                 }
                 else
                 {
                     generated.append_line("        try");
                     generated.append_line("        {");
-                    generated.append_line_format("            return {};", native_call);
+                    if (defaults == 0)
+                    {
+                        generated.append_line_format("            return {};", native_call);
+                    }
+                    else
+                    {
+                        append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                            call_arguments, defaults, default_variant_has_value_expressions, "", true);
+                    }
                     generated.append_line("        }");
                     generated.append_line("        finally");
                     generated.append_line("        {");
@@ -1765,8 +2072,18 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
                 if (!needs_finally)
                 {
-                    generated.append_line_format(
-                        "        {} {} = {};", function_decl.return_type.pinvoke_name, native_result_name, native_call);
+                    if (defaults == 0)
+                    {
+                        generated.append_line_format(
+                            "        {} {} = {};", function_decl.return_type.pinvoke_name, native_result_name, native_call);
+                    }
+                    else
+                    {
+                        generated.append_line_format(
+                            "        {} {} = default!;", function_decl.return_type.pinvoke_name, native_result_name);
+                        append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                            call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
+                    }
                     append_embedded_assignment(
                         generated,
                         "        ",
@@ -1781,7 +2098,15 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     generated.append_line_format("        {} {} = default!;", return_type, managed_result_name);
                     generated.append_line("        try");
                     generated.append_line("        {");
-                    generated.append_line_format("            {} = {};", native_result_name, native_call);
+                    if (defaults == 0)
+                    {
+                        generated.append_line_format("            {} = {};", native_result_name, native_call);
+                    }
+                    else
+                    {
+                        append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                            call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
+                    }
                     append_embedded_assignment(
                         generated,
                         "            ",

@@ -44,6 +44,21 @@ std::string render_callback_argument_name(std::size_t index)
     return std::format("__csbind23_arg{}_c", index);
 }
 
+std::size_t normalized_trailing_default_count(const FunctionDecl& function_decl)
+{
+    return function_decl.trailing_default_argument_count > function_decl.parameters.size()
+        ? function_decl.parameters.size()
+        : function_decl.trailing_default_argument_count;
+}
+
+std::vector<ParameterDecl> leading_parameters(const FunctionDecl& function_decl, std::size_t parameter_count)
+{
+    const std::size_t clamped = parameter_count > function_decl.parameters.size()
+        ? function_decl.parameters.size()
+        : parameter_count;
+    return std::vector<ParameterDecl>(function_decl.parameters.begin(), function_decl.parameters.begin() + clamped);
+}
+
 void append_converted_arguments(TextWriter& output, const std::vector<ParameterDecl>& parameters)
 {
     for (std::size_t index = 0; index < parameters.size(); ++index)
@@ -74,15 +89,17 @@ std::string render_call_arguments(const std::vector<ParameterDecl>& parameters)
     return arguments;
 }
 
-void append_function_signature(TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name)
+void append_function_signature(
+    TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, std::size_t parameter_count)
 {
     output.append_format("extern \"C\" {} {}(", function_decl.return_type.c_abi_name, exported_name);
 
-    for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
+    const auto parameters = leading_parameters(function_decl, parameter_count);
+    for (std::size_t index = 0; index < parameters.size(); ++index)
     {
-        const auto& parameter = function_decl.parameters[index];
+        const auto& parameter = parameters[index];
         output.append_format("{} {}", parameter.type.c_abi_name, parameter.name);
-        if (index + 1 < function_decl.parameters.size())
+        if (index + 1 < parameters.size())
         {
             output.append(", ");
         }
@@ -91,12 +108,14 @@ void append_function_signature(TextWriter& output, const FunctionDecl& function_
     output.append(")");
 }
 
-void append_method_signature(TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name)
+void append_method_signature(
+    TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, std::size_t parameter_count)
 {
     const char* self_type = function_decl.is_const ? "const void*" : "void*";
     output.append_format("extern \"C\" {} {}({} self", function_decl.return_type.c_abi_name, exported_name, self_type);
 
-    for (const auto& parameter : function_decl.parameters)
+    const auto parameters = leading_parameters(function_decl, parameter_count);
+    for (const auto& parameter : parameters)
     {
         output.append_format(", {} {}", parameter.type.c_abi_name, parameter.name);
     }
@@ -104,10 +123,11 @@ void append_method_signature(TextWriter& output, const FunctionDecl& function_de
     output.append(")");
 }
 
-void append_free_function_body(TextWriter& output, const FunctionDecl& function_decl)
+void append_free_function_body(TextWriter& output, const FunctionDecl& function_decl, std::size_t parameter_count)
 {
-    append_converted_arguments(output, function_decl.parameters);
-    const std::string call_arguments = render_call_arguments(function_decl.parameters);
+    const auto parameters = leading_parameters(function_decl, parameter_count);
+    append_converted_arguments(output, parameters);
+    const std::string call_arguments = render_call_arguments(parameters);
     if (function_decl.return_type.c_abi_name == "void")
     {
         output.append_line_format("    {}({});", function_decl.cpp_symbol, call_arguments);
@@ -416,10 +436,11 @@ void append_director_class(TextWriter& output, const std::string& module_name, c
 }
 
 void append_constructor_body(TextWriter& output, const std::string& module_name, const ClassDecl& class_decl,
-    const FunctionDecl& ctor_decl, bool use_director)
+    const FunctionDecl& ctor_decl, bool use_director, std::size_t parameter_count)
 {
-    append_converted_arguments(output, ctor_decl.parameters);
-    const std::string call_arguments = render_call_arguments(ctor_decl.parameters);
+    const auto parameters = leading_parameters(ctor_decl, parameter_count);
+    append_converted_arguments(output, parameters);
+    const std::string call_arguments = render_call_arguments(parameters);
     const Ownership ownership = infer_ownership(ctor_decl);
 
     if (ownership == Ownership::Borrowed)
@@ -439,7 +460,8 @@ void append_constructor_body(TextWriter& output, const std::string& module_name,
 }
 
 void append_method_body(
-    TextWriter& output, const ClassDecl& class_decl, const FunctionDecl& method_decl, bool explicit_base_call)
+    TextWriter& output, const ClassDecl& class_decl, const FunctionDecl& method_decl, bool explicit_base_call,
+    std::size_t parameter_count)
 {
     if (method_decl.is_const)
     {
@@ -456,9 +478,10 @@ void append_method_body(
         output.append_line("    auto* instance = __csbind23_self_cpp;");
     }
 
-    append_converted_arguments(output, method_decl.parameters);
+    const auto parameters = leading_parameters(method_decl, parameter_count);
+    append_converted_arguments(output, parameters);
 
-    const std::string call_arguments = render_call_arguments(method_decl.parameters);
+    const std::string call_arguments = render_call_arguments(parameters);
     const std::string owner_class_name = method_decl.class_name.empty() ? class_decl.cpp_name : method_decl.class_name;
     const std::string method_expr = explicit_base_call
         ? std::format("{}::{}", owner_class_name, method_decl.cpp_symbol)
@@ -550,11 +573,26 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
     for (const auto& function_decl : module_decl.functions)
     {
-        append_function_signature(generated, function_decl, module_decl.name + "_" + function_decl.name);
+        append_function_signature(
+            generated, function_decl, module_decl.name + "_" + function_decl.name, function_decl.parameters.size());
         generated.append_line(" {");
-        append_free_function_body(generated, function_decl);
+        append_free_function_body(generated, function_decl, function_decl.parameters.size());
         generated.append_line("}");
         generated.append_line();
+
+        const std::size_t defaults = normalized_trailing_default_count(function_decl);
+        for (std::size_t omitted = 1; omitted <= defaults; ++omitted)
+        {
+            const std::size_t parameter_count = function_decl.parameters.size() - omitted;
+            const std::string exported_name =
+                module_decl.name + "_" + function_decl.name + std::format("__default_{}", omitted);
+
+            append_function_signature(generated, function_decl, exported_name, parameter_count);
+            generated.append_line(" {");
+            append_free_function_body(generated, function_decl, parameter_count);
+            generated.append_line("}");
+            generated.append_line();
+        }
     }
 
     for (const auto& class_decl : module_decl.classes)
@@ -659,11 +697,25 @@ std::vector<std::filesystem::path> emit_cabi_module(
             if (method_decl.is_constructor)
             {
                 const std::string exported_name = module_decl.name + "_" + class_decl.name + "_create";
-                append_function_signature(generated, method_decl, exported_name);
+                append_function_signature(generated, method_decl, exported_name, method_decl.parameters.size());
                 generated.append_line(" {");
-                append_constructor_body(generated, module_decl.name, class_decl, method_decl, has_virtual_director);
+                append_constructor_body(
+                    generated, module_decl.name, class_decl, method_decl, has_virtual_director, method_decl.parameters.size());
                 generated.append_line("}");
                 generated.append_line();
+
+                const std::size_t defaults = normalized_trailing_default_count(method_decl);
+                for (std::size_t omitted = 1; omitted <= defaults; ++omitted)
+                {
+                    const std::size_t parameter_count = method_decl.parameters.size() - omitted;
+                    const std::string default_exported_name = exported_name + std::format("__default_{}", omitted);
+                    append_function_signature(generated, method_decl, default_exported_name, parameter_count);
+                    generated.append_line(" {");
+                    append_constructor_body(
+                        generated, module_decl.name, class_decl, method_decl, has_virtual_director, parameter_count);
+                    generated.append_line("}");
+                    generated.append_line();
+                }
             }
         }
 
@@ -672,17 +724,29 @@ std::vector<std::filesystem::path> emit_cabi_module(
             const auto& method_decl = emitted_method.method;
             const std::string exported_name = module_decl.name + "_" + class_decl.name + "_" + method_decl.name;
 
-            append_method_signature(generated, method_decl, exported_name);
+            append_method_signature(generated, method_decl, exported_name, method_decl.parameters.size());
             generated.append_line(" {");
-            append_method_body(generated, class_decl, method_decl, false);
+            append_method_body(generated, class_decl, method_decl, false, method_decl.parameters.size());
             generated.append_line("}");
             generated.append_line();
 
+            const std::size_t defaults = normalized_trailing_default_count(method_decl);
+            for (std::size_t omitted = 1; omitted <= defaults; ++omitted)
+            {
+                const std::size_t parameter_count = method_decl.parameters.size() - omitted;
+                const std::string default_exported_name = exported_name + std::format("__default_{}", omitted);
+                append_method_signature(generated, method_decl, default_exported_name, parameter_count);
+                generated.append_line(" {");
+                append_method_body(generated, class_decl, method_decl, false, parameter_count);
+                generated.append_line("}");
+                generated.append_line();
+            }
+
             if (has_virtual_director && method_decl.allow_override)
             {
-                append_method_signature(generated, method_decl, exported_name + "__base");
+                append_method_signature(generated, method_decl, exported_name + "__base", method_decl.parameters.size());
                 generated.append_line(" {");
-                append_method_body(generated, class_decl, method_decl, true);
+                append_method_body(generated, class_decl, method_decl, true, method_decl.parameters.size());
                 generated.append_line("}");
                 generated.append_line();
             }
