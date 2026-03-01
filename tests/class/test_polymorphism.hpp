@@ -53,7 +53,7 @@ inline void register_bindings_polymorphism(BindingsGenerator& generator, std::st
         .def<&polymorphism::make_animal>();
 
     module.class_<polymorphism::Animal>()
-        .def_virtual<&polymorphism::Animal::sound_code>()
+        .def<&polymorphism::Animal::sound_code>(csbind23::Virtual{})
         .def<&polymorphism::Animal::sound_code_through_native>();
 
     module.class_<polymorphism::Dog, polymorphism::Animal>()

@@ -36,10 +36,10 @@ inline void register_bindings_default_args(BindingsGenerator& generator, std::st
     module.csharp_api_class("DefaultArgsApi")
         .pinvoke_library("e2e.C")
         .cabi_include("\"tests/basic/test_default_args.hpp\"")
-        .def_with_defaults<&default_args::sum3>("sum3", 2)
-        .def_with_defaults<&default_args::weighted>("weighted", 2)
-        .def_with_defaults<&default_args::affine>("affine", 2)
-        .def_with_defaults<&default_args::four_defaults>("four_defaults", 3);
+        .def<&default_args::sum3>("sum3", csbind23::WithDefaults{2})
+        .def<&default_args::weighted>("weighted", csbind23::WithDefaults{2})
+        .def<&default_args::affine>("affine", csbind23::WithDefaults{2})
+        .def<&default_args::four_defaults>("four_defaults", csbind23::WithDefaults{3});
 }
 
 } // namespace csbind23::testing

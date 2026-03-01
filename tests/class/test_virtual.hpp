@@ -67,9 +67,9 @@ inline void register_bindings_virtual(BindingsGenerator& generator, std::string_
 
     module.class_<virtual_dispatch::VirtualCounter>()
         .ctor<int>()
-        .def_virtual<&virtual_dispatch::VirtualCounter::add>()
-        .def_virtual<&virtual_dispatch::VirtualCounter::read>()
-        .def_virtual<&virtual_dispatch::VirtualCounter::describe>()
+        .def<&virtual_dispatch::VirtualCounter::add>(csbind23::Virtual{})
+        .def<&virtual_dispatch::VirtualCounter::read>(csbind23::Virtual{})
+        .def<&virtual_dispatch::VirtualCounter::describe>(csbind23::Virtual{})
         .def<&virtual_dispatch::VirtualCounter::add_through_native>()
         .def<&virtual_dispatch::VirtualCounter::read_through_native>()
         .def<&virtual_dispatch::VirtualCounter::describe_through_native>();

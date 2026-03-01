@@ -93,7 +93,7 @@ inline void register_bindings_multi_inheritance(BindingsGenerator& generator, st
 
     module.class_<multi_inheritance::SecondaryBase>()
         .def<&multi_inheritance::SecondaryBase::secondary_scale>()
-        .def_virtual<&multi_inheritance::SecondaryBase::secondary_virtual>()
+        .def<&multi_inheritance::SecondaryBase::secondary_virtual>(csbind23::Virtual{})
         .def<&multi_inheritance::SecondaryBase::secondary_virtual_through_native>();
 
     module.class_<multi_inheritance::TertiaryBase>()

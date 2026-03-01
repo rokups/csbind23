@@ -57,9 +57,9 @@ inline void register_bindings_properties(BindingsGenerator& generator, std::stri
 
     module.class_<properties::PropertyBag>()
         .ctor<>()
-        .def_property<&properties::PropertyBag::get_count, &properties::PropertyBag::set_count>("Count")
-        .def_property<&properties::PropertyBag::get_label, &properties::PropertyBag::set_label>("Label")
-        .def_property<&properties::PropertyBag::get_read_only_tag>("ReadOnlyTag");
+        .property<&properties::PropertyBag::get_count, &properties::PropertyBag::set_count>("Count")
+        .property<&properties::PropertyBag::get_label, &properties::PropertyBag::set_label>("Label")
+        .property<&properties::PropertyBag::get_read_only_tag>("ReadOnlyTag");
 }
 
 } // namespace csbind23::testing

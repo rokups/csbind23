@@ -4,10 +4,12 @@
 #include "csbind23/type_utils.hpp"
 
 #include <filesystem>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace csbind23
@@ -16,6 +18,20 @@ namespace csbind23
 class ModuleBuilder;
 class ClassBuilder;
 class EnumBuilder;
+
+struct WithDefaults
+{
+    std::size_t trailing_default_argument_count;
+};
+
+struct Virtual
+{
+};
+
+struct CppSymbol
+{
+    std::string_view value;
+};
 
 class BindingsGenerator
 {
@@ -126,84 +142,36 @@ public:
         return *this;
     }
 
-    template <auto Function> ModuleBuilder& def(Ownership return_ownership = Ownership::Auto)
+    template <auto Function> ModuleBuilder& def()
     {
-        return def_from_constant(detail::function_export_name<Function>(), Function, return_ownership, 0,
-            detail::function_symbol_name<Function>());
+        return def<Function>(detail::function_export_name<Function>());
     }
 
-    template <auto Function> ModuleBuilder& def(std::string_view name, Ownership return_ownership = Ownership::Auto)
+    template <auto Function, typename FirstOption, typename... RestOptions>
+        requires(!std::is_convertible_v<std::decay_t<FirstOption>, std::string_view>)
+    ModuleBuilder& def(FirstOption&& first_option, RestOptions&&... rest_options)
     {
-        return def_from_constant(name, Function, return_ownership, 0, detail::function_symbol_name<Function>());
+        return def<Function>(detail::function_export_name<Function>(), std::forward<FirstOption>(first_option),
+            std::forward<RestOptions>(rest_options)...);
     }
 
-    template <auto Function>
-    ModuleBuilder& def_with_defaults(std::size_t trailing_default_argument_count,
-        Ownership return_ownership = Ownership::Auto)
+    template <auto Function, typename... Options>
+    ModuleBuilder& def(std::string_view name, Options&&... options)
     {
-        return def_from_constant(detail::function_export_name<Function>(), Function, return_ownership,
-            trailing_default_argument_count, detail::function_symbol_name<Function>());
+        const auto def_options = make_function_def_options(std::forward<Options>(options)...);
+        const std::string cpp_symbol = def_options.cpp_symbol.empty()
+            ? std::string(detail::function_symbol_name<Function>())
+            : std::string(def_options.cpp_symbol);
+        return def_impl(name, Function, def_options.return_ownership, def_options.trailing_default_argument_count,
+            cpp_symbol);
     }
 
-    template <auto Function>
-    ModuleBuilder& def_with_defaults(std::string_view name, std::size_t trailing_default_argument_count,
-        Ownership return_ownership = Ownership::Auto)
+    template <typename ReturnType, typename... Args, typename... Options>
+    ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), Options&&... options)
     {
-        return def_from_constant(
-            name, Function, return_ownership, trailing_default_argument_count, detail::function_symbol_name<Function>());
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...))
-    {
-        return def_impl(name, function_ptr, Ownership::Auto, 0, {});
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), std::string_view cpp_symbol)
-    {
-        return def_impl(name, function_ptr, Ownership::Auto, 0, cpp_symbol);
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership)
-    {
-        return def_impl(name, function_ptr, return_ownership, 0, {});
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
-        std::string_view cpp_symbol)
-    {
-        return def_impl(name, function_ptr, return_ownership, 0, cpp_symbol);
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
-        std::size_t trailing_default_argument_count)
-    {
-        return def_impl(name, function_ptr, Ownership::Auto, trailing_default_argument_count, {});
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
-        std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
-    {
-        return def_impl(name, function_ptr, Ownership::Auto, trailing_default_argument_count, cpp_symbol);
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
-        Ownership return_ownership, std::size_t trailing_default_argument_count)
-    {
-        return def_impl(name, function_ptr, return_ownership, trailing_default_argument_count, {});
-    }
-
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def_with_defaults(std::string_view name, ReturnType (*function_ptr)(Args...),
-        Ownership return_ownership, std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
-    {
-        return def_impl(name, function_ptr, return_ownership, trailing_default_argument_count, cpp_symbol);
+        const auto def_options = make_function_def_options(std::forward<Options>(options)...);
+        return def_impl(name, function_ptr, def_options.return_ownership, def_options.trailing_default_argument_count,
+            def_options.cpp_symbol);
     }
 
     template <typename ReturnType, typename... Args>
@@ -230,13 +198,6 @@ public:
         return *this;
     }
 
-    template <typename ReturnType, typename... Args>
-    ModuleBuilder& def_from_constant(std::string_view name, ReturnType (*function_ptr)(Args...),
-        Ownership return_ownership, std::size_t trailing_default_argument_count, std::string_view cpp_symbol)
-    {
-        return def_impl(name, function_ptr, return_ownership, trailing_default_argument_count, cpp_symbol);
-    }
-
     template <typename ClassType, typename... BaseTypes>
     ClassBuilder class_(std::string_view name = detail::unqualified_type_name<ClassType>(),
         std::string_view cpp_name = detail::qualified_type_name<ClassType>());
@@ -246,6 +207,45 @@ public:
         std::string_view cpp_name = detail::qualified_type_name<EnumType>());
 
 private:
+    struct FunctionDefOptions
+    {
+        Ownership return_ownership = Ownership::Auto;
+        std::size_t trailing_default_argument_count = 0;
+        std::string_view cpp_symbol = {};
+    };
+
+    template <typename Option> struct dependent_false : std::false_type
+    {
+    };
+
+    template <typename... Options> static FunctionDefOptions make_function_def_options(Options&&... options)
+    {
+        FunctionDefOptions parsed_options;
+        (apply_function_def_option(parsed_options, std::forward<Options>(options)), ...);
+        return parsed_options;
+    }
+
+    static void apply_function_def_option(FunctionDefOptions& options, Ownership return_ownership)
+    {
+        options.return_ownership = return_ownership;
+    }
+
+    static void apply_function_def_option(FunctionDefOptions& options, WithDefaults with_defaults)
+    {
+        options.trailing_default_argument_count = with_defaults.trailing_default_argument_count;
+    }
+
+    static void apply_function_def_option(FunctionDefOptions& options, CppSymbol cpp_symbol)
+    {
+        options.cpp_symbol = cpp_symbol.value;
+    }
+
+    template <typename Option> static void apply_function_def_option(FunctionDefOptions&, Option&&)
+    {
+        static_assert(dependent_false<std::decay_t<Option>>::value,
+            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol.");
+    }
+
     BindingsGenerator* owner_;
     ModuleDecl* module_decl_;
 };
@@ -261,14 +261,23 @@ public:
         return *this;
     }
 
-    template <auto MethodPtr> ClassBuilder& def(Ownership return_ownership = Ownership::Auto)
+    template <auto MethodPtr> ClassBuilder& def()
     {
-        return def(detail::function_export_name<MethodPtr>(), MethodPtr, return_ownership);
+        return def<MethodPtr>(detail::function_export_name<MethodPtr>());
     }
 
-    template <auto MethodPtr> ClassBuilder& def(std::string_view name, Ownership return_ownership = Ownership::Auto)
+    template <auto MethodPtr, typename FirstOption, typename... RestOptions>
+        requires(!std::is_convertible_v<std::decay_t<FirstOption>, std::string_view>)
+    ClassBuilder& def(FirstOption&& first_option, RestOptions&&... rest_options)
     {
-        return def(name, MethodPtr, return_ownership);
+        return def<MethodPtr>(detail::function_export_name<MethodPtr>(), std::forward<FirstOption>(first_option),
+            std::forward<RestOptions>(rest_options)...);
+    }
+
+    template <auto MethodPtr, typename... Options>
+    ClassBuilder& def(std::string_view name, Options&&... options)
+    {
+        return def(name, MethodPtr, std::forward<Options>(options)...);
     }
 
     template <typename... Args> ClassBuilder& ctor(Ownership ownership = Ownership::Auto)
@@ -291,68 +300,50 @@ public:
         return *this;
     }
 
-    template <typename ClassType, typename ReturnType, typename... Args>
-    ClassBuilder& def(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...),
-        Ownership return_ownership = Ownership::Auto)
+    template <typename ClassType, typename ReturnType, typename... Args, typename... Options>
+    ClassBuilder& def(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...), Options&&... options)
     {
         (void)method_ptr;
-        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership, 0);
+        const auto def_options = make_method_def_options(std::forward<Options>(options)...);
+        if (def_options.allow_override)
+        {
+            class_decl_->enable_virtual_overrides = true;
+        }
+        add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
+            def_options.trailing_default_argument_count, def_options.allow_override, false, false,
+            def_options.cpp_symbol);
         return *this;
     }
 
-    template <typename ClassType, typename ReturnType, typename... Args>
-    ClassBuilder& def(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...) const,
-        Ownership return_ownership = Ownership::Auto)
+    template <typename ClassType, typename ReturnType, typename... Args, typename... Options>
+    ClassBuilder& def(
+        std::string_view name, ReturnType (ClassType::*method_ptr)(Args...) const, Options&&... options)
     {
         (void)method_ptr;
-        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership, 0);
+        const auto def_options = make_method_def_options(std::forward<Options>(options)...);
+        if (def_options.allow_override)
+        {
+            class_decl_->enable_virtual_overrides = true;
+        }
+        add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
+            def_options.trailing_default_argument_count, def_options.allow_override, false, false,
+            def_options.cpp_symbol);
         return *this;
     }
 
-    template <auto MethodPtr> ClassBuilder& def_virtual(Ownership return_ownership = Ownership::Auto)
+    template <auto GetterPtr> ClassBuilder& property(std::string_view name)
     {
-        return def_virtual(detail::function_export_name<MethodPtr>(), MethodPtr, return_ownership);
+        return property(name, GetterPtr, detail::function_symbol_name<GetterPtr>());
     }
 
-    template <auto MethodPtr>
-    ClassBuilder& def_virtual(std::string_view name, Ownership return_ownership = Ownership::Auto)
+    template <auto GetterPtr, auto SetterPtr> ClassBuilder& property(std::string_view name)
     {
-        return def_virtual(name, MethodPtr, return_ownership);
-    }
-
-    template <typename ClassType, typename ReturnType, typename... Args>
-    ClassBuilder& def_virtual(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...),
-        Ownership return_ownership = Ownership::Auto)
-    {
-        (void)method_ptr;
-        class_decl_->enable_virtual_overrides = true;
-        add_method<ClassType, ReturnType, Args...>(name, false, return_ownership, 0, true);
-        return *this;
-    }
-
-    template <typename ClassType, typename ReturnType, typename... Args>
-    ClassBuilder& def_virtual(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...) const,
-        Ownership return_ownership = Ownership::Auto)
-    {
-        (void)method_ptr;
-        class_decl_->enable_virtual_overrides = true;
-        add_method<ClassType, ReturnType, Args...>(name, true, return_ownership, 0, true);
-        return *this;
-    }
-
-    template <auto GetterPtr> ClassBuilder& def_property(std::string_view name)
-    {
-        return def_property(name, GetterPtr, detail::function_symbol_name<GetterPtr>());
-    }
-
-    template <auto GetterPtr, auto SetterPtr> ClassBuilder& def_property(std::string_view name)
-    {
-        return def_property(name, GetterPtr, SetterPtr, detail::function_symbol_name<GetterPtr>(),
+        return property(name, GetterPtr, SetterPtr, detail::function_symbol_name<GetterPtr>(),
             detail::function_symbol_name<SetterPtr>());
     }
 
     template <typename ClassType, typename ReturnType>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
         std::string_view getter_cpp_symbol)
     {
         (void)getter_ptr;
@@ -370,7 +361,7 @@ public:
     }
 
     template <typename ClassType, typename ReturnType>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
         std::string_view getter_cpp_symbol)
     {
         (void)getter_ptr;
@@ -388,7 +379,7 @@ public:
     }
 
     template <typename ClassType, typename ReturnType>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)())
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)())
     {
         (void)getter_ptr;
         PropertyDecl property_decl;
@@ -405,7 +396,7 @@ public:
     }
 
     template <typename ClassType, typename ReturnType>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const)
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const)
     {
         (void)getter_ptr;
         PropertyDecl property_decl;
@@ -422,27 +413,27 @@ public:
     }
 
     template <typename ClassType, typename ReturnType, typename SetterArg>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
         void (ClassType::*setter_ptr)(SetterArg))
     {
         (void)getter_ptr;
         (void)setter_ptr;
 
-        return def_property(name, getter_ptr, setter_ptr, std::string(name), std::string(name));
+        return property(name, getter_ptr, setter_ptr, std::string(name), std::string(name));
     }
 
     template <typename ClassType, typename ReturnType, typename SetterArg>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
         void (ClassType::*setter_ptr)(SetterArg))
     {
         (void)getter_ptr;
         (void)setter_ptr;
 
-        return def_property(name, getter_ptr, setter_ptr, std::string(name), std::string(name));
+        return property(name, getter_ptr, setter_ptr, std::string(name), std::string(name));
     }
 
     template <typename ClassType, typename ReturnType, typename SetterArg>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)() const,
         void (ClassType::*setter_ptr)(SetterArg), std::string_view getter_cpp_symbol,
         std::string_view setter_cpp_symbol)
     {
@@ -467,7 +458,7 @@ public:
     }
 
     template <typename ClassType, typename ReturnType, typename SetterArg>
-    ClassBuilder& def_property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
+    ClassBuilder& property(std::string_view name, ReturnType (ClassType::*getter_ptr)(),
         void (ClassType::*setter_ptr)(SetterArg), std::string_view getter_cpp_symbol,
         std::string_view setter_cpp_symbol)
     {
@@ -492,6 +483,51 @@ public:
     }
 
 private:
+    struct MethodDefOptions
+    {
+        Ownership return_ownership = Ownership::Auto;
+        std::size_t trailing_default_argument_count = 0;
+        bool allow_override = false;
+        std::string_view cpp_symbol = {};
+    };
+
+    template <typename Option> struct dependent_false : std::false_type
+    {
+    };
+
+    template <typename... Options> static MethodDefOptions make_method_def_options(Options&&... options)
+    {
+        MethodDefOptions parsed_options;
+        (apply_method_def_option(parsed_options, std::forward<Options>(options)), ...);
+        return parsed_options;
+    }
+
+    static void apply_method_def_option(MethodDefOptions& options, Ownership return_ownership)
+    {
+        options.return_ownership = return_ownership;
+    }
+
+    static void apply_method_def_option(MethodDefOptions& options, WithDefaults with_defaults)
+    {
+        options.trailing_default_argument_count = with_defaults.trailing_default_argument_count;
+    }
+
+    static void apply_method_def_option(MethodDefOptions& options, Virtual)
+    {
+        options.allow_override = true;
+    }
+
+    static void apply_method_def_option(MethodDefOptions& options, CppSymbol cpp_symbol)
+    {
+        options.cpp_symbol = cpp_symbol.value;
+    }
+
+    template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
+    {
+        static_assert(dependent_false<std::decay_t<Option>>::value,
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol.");
+    }
+
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_method(std::string_view name, bool is_const, Ownership return_ownership,
         std::size_t trailing_default_argument_count = 0, bool allow_override = false,
