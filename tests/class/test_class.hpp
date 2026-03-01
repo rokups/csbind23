@@ -75,10 +75,6 @@ inline void register_bindings_class(BindingsGenerator& generator, std::string_vi
         .ctor<int>()
         .def<&class_wrapping::Counter::add>()
         .def<&class_wrapping::Counter::read>()
-        .def_generic<&class_wrapping::Counter::read_as<int>, &class_wrapping::Counter::read_as<double>>(
-            "read_generic")
-        .def_generic<&class_wrapping::Counter::add_pair<int, double>,
-            &class_wrapping::Counter::add_pair<double, int>>("add_pair_generic")
         .def<&class_wrapping::Counter::reset>();
 }
 

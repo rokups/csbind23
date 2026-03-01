@@ -80,10 +80,6 @@ inline void register_bindings_basic(BindingsGenerator& generator, std::string_vi
         .def<&basic::get_and_return<float>>("get_and_return_float")
         .def<&basic::get_and_return<double>>("get_and_return_double")
         .def<&basic::get_and_return<char16_t>>("get_and_return_char16")
-        .def_generic<&basic::get_and_return<int32_t>, &basic::get_and_return<double>>("get_and_return_generic")
-        .def_generic<
-            &basic::add_casted<int32_t, double>,
-            &basic::add_casted<double, int32_t>>("add_casted_generic")
         .def<&basic::add_assign_ref<int32_t>>("add_assign_ref_int32")
         .def<&basic::add_assign_ref<double>>("add_assign_ref_double")
         .def<&basic::add_assign_ptr<int32_t>>("add_assign_ptr_int32")

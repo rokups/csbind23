@@ -20,6 +20,7 @@ namespace csbind23
 
 class ModuleBuilder;
 class ClassBuilder;
+template <typename... ClassTypes> class GenericClassBuilder;
 class EnumBuilder;
 
 struct WithDefaults
@@ -103,6 +104,12 @@ inline void mark_generic_instantiation(FunctionDecl& function_decl, std::string_
 {
     function_decl.is_generic_instantiation = true;
     function_decl.generic_group_name = std::string(group_name);
+}
+
+inline void mark_generic_instantiation(ClassDecl& class_decl, std::string_view group_name)
+{
+    class_decl.is_generic_instantiation = true;
+    class_decl.generic_group_name = std::string(group_name);
 }
 
 inline void apply_arg_options(std::vector<ParameterDecl>& parameters, const std::vector<Arg>& arg_options)
@@ -317,6 +324,12 @@ public:
 
     template <typename ClassType, typename... BaseTypes, typename... Options>
     ClassBuilder class_(std::string_view name, Options&&... options);
+
+    template <typename FirstClass, typename... RestClasses>
+    GenericClassBuilder<FirstClass, RestClasses...> class_generic();
+
+    template <typename FirstClass, typename... RestClasses>
+    GenericClassBuilder<FirstClass, RestClasses...> class_generic(std::string_view name);
 
     template <typename EnumType>
     EnumBuilder enum_();
@@ -1012,6 +1025,61 @@ private:
     ClassDecl* class_decl_;
 };
 
+template <typename... ClassTypes>
+class GenericClassBuilder
+{
+public:
+    GenericClassBuilder(
+        BindingsGenerator& owner, ModuleDecl& module_decl, std::vector<std::size_t> class_indices, std::string group_name)
+        : owner_(&owner)
+        , module_decl_(&module_decl)
+        , class_indices_(std::move(class_indices))
+        , group_name_(std::move(group_name))
+    {
+    }
+
+    template <typename... Args> GenericClassBuilder& ctor(Ownership ownership = Ownership::Auto)
+    {
+        for (const auto class_index : class_indices_)
+        {
+            ClassBuilder(*owner_, module_decl_->classes[class_index]).template ctor<Args...>(ownership);
+        }
+        return *this;
+    }
+
+    template <auto FirstMethodPtr, auto... RestMethodPtrs> GenericClassBuilder& def()
+    {
+        return def<FirstMethodPtr, RestMethodPtrs...>(detail::function_export_name<FirstMethodPtr>());
+    }
+
+    template <auto FirstMethodPtr, auto... RestMethodPtrs, typename... Options>
+    GenericClassBuilder& def(std::string_view name, Options&&... options)
+    {
+        constexpr std::size_t method_count = 1 + sizeof...(RestMethodPtrs);
+        constexpr std::size_t class_count = sizeof...(ClassTypes);
+        static_assert(method_count == class_count,
+            "GenericClassBuilder::def requires one method pointer per class instantiation.");
+
+        auto options_tuple = std::make_tuple(std::forward<Options>(options)...);
+        detail::for_each_nontype_indexed<FirstMethodPtr, RestMethodPtrs...>([&]<auto MethodPtr>(std::size_t index) {
+            ClassBuilder class_builder(*owner_, module_decl_->classes[class_indices_[index]]);
+            std::apply(
+                [&]<typename... OptionTypes>(const OptionTypes&... unpacked_options) {
+                    class_builder.template def<MethodPtr>(name, unpacked_options...);
+                },
+                options_tuple);
+        });
+
+        return *this;
+    }
+
+private:
+    BindingsGenerator* owner_;
+    ModuleDecl* module_decl_;
+    std::vector<std::size_t> class_indices_;
+    std::string group_name_;
+};
+
 class EnumBuilder
 {
 public:
@@ -1069,6 +1137,36 @@ ClassBuilder ModuleBuilder::class_(std::string_view name, Options&&... options)
     }
     module_decl_->classes.push_back(std::move(class_decl));
     return ClassBuilder(*owner_, module_decl_->classes.back());
+}
+
+template <typename FirstClass, typename... RestClasses>
+GenericClassBuilder<FirstClass, RestClasses...> ModuleBuilder::class_generic()
+{
+    return class_generic<FirstClass, RestClasses...>(detail::unqualified_type_name<FirstClass>());
+}
+
+template <typename FirstClass, typename... RestClasses>
+GenericClassBuilder<FirstClass, RestClasses...> ModuleBuilder::class_generic(std::string_view name)
+{
+    const std::string group_name(name);
+    std::vector<std::size_t> instantiation_indices;
+    instantiation_indices.reserve(1 + sizeof...(RestClasses));
+
+    auto add_instantiation = [this, &group_name, &instantiation_indices]<typename ClassType>() {
+        const std::string unique_suffix = detail::generic_instantiation_suffix(module_decl_->classes.size());
+        const std::string managed_name = group_name + unique_suffix;
+        (void)class_<ClassType>(managed_name, CppName{detail::qualified_type_name<ClassType>()});
+        const std::size_t class_index = module_decl_->classes.size() - 1;
+        ClassDecl& class_decl = module_decl_->classes[class_index];
+        detail::mark_generic_instantiation(class_decl, group_name);
+        instantiation_indices.push_back(class_index);
+    };
+
+    add_instantiation.template operator()<FirstClass>();
+    (add_instantiation.template operator()<RestClasses>(), ...);
+
+    return GenericClassBuilder<FirstClass, RestClasses...>(
+        *owner_, *module_decl_, std::move(instantiation_indices), group_name);
 }
 
 template <typename EnumType>

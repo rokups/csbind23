@@ -126,6 +126,8 @@ struct ClassDecl
     std::string base_cpp_name;
     std::vector<BaseClassDecl> base_classes;
     bool enable_virtual_overrides = false;
+    bool is_generic_instantiation = false;
+    std::string generic_group_name;
     std::vector<std::string> csharp_attributes;
     std::vector<FunctionDecl> methods;
     std::vector<PropertyDecl> properties;
