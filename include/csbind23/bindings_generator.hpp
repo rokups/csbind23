@@ -90,6 +90,11 @@ struct Arg
     std::size_t size_param_idx = std::numeric_limits<std::size_t>::max();
 };
 
+template <typename... Types>
+struct TemplateArgs
+{
+};
+
 namespace detail
 {
 
@@ -149,6 +154,41 @@ inline void apply_arg_options(std::vector<ParameterDecl>& parameters, const std:
             parameter.c_array_size_param_index = arg_option.size_param_idx;
         }
     }
+}
+
+template <typename Spec>
+struct TemplateSpecExpander
+{
+    template <template <typename...> typename ClassTemplate>
+    using class_type = ClassTemplate<Spec>;
+
+    template <auto Resolver>
+    static consteval auto resolve_nontype()
+    {
+        return Resolver.template operator()<Spec>();
+    }
+};
+
+template <typename... Types>
+struct TemplateSpecExpander<TemplateArgs<Types...>>
+{
+    template <template <typename...> typename ClassTemplate>
+    using class_type = ClassTemplate<Types...>;
+
+    template <auto Resolver>
+    static consteval auto resolve_nontype()
+    {
+        return Resolver.template operator()<Types...>();
+    }
+};
+
+template <template <typename...> typename ClassTemplate, typename Spec>
+using instantiate_template_from_spec_t = typename TemplateSpecExpander<Spec>::template class_type<ClassTemplate>;
+
+template <auto Resolver, typename Spec>
+consteval auto resolve_nontype_from_spec()
+{
+    return TemplateSpecExpander<Spec>::template resolve_nontype<Resolver>();
 }
 
 } // namespace detail
@@ -374,6 +414,18 @@ public:
 
     template <typename FirstClass, typename... RestClasses>
     GenericClassBuilder<FirstClass, RestClasses...> class_generic(std::string_view name);
+
+    template <template <typename...> typename ClassTemplate, typename FirstSpec, typename... RestSpecs>
+    GenericClassBuilder<
+        detail::instantiate_template_from_spec_t<ClassTemplate, FirstSpec>,
+        detail::instantiate_template_from_spec_t<ClassTemplate, RestSpecs>...>
+    class_generic();
+
+    template <template <typename...> typename ClassTemplate, typename FirstSpec, typename... RestSpecs>
+    GenericClassBuilder<
+        detail::instantiate_template_from_spec_t<ClassTemplate, FirstSpec>,
+        detail::instantiate_template_from_spec_t<ClassTemplate, RestSpecs>...>
+    class_generic(std::string_view name);
 
     template <typename EnumType>
     EnumBuilder enum_();
@@ -704,12 +756,17 @@ public:
         return *this;
     }
 
-    template <auto FirstMethodPtr, auto... RestMethodPtrs> ClassBuilder& def_generic()
+    template <auto FirstMethodPtr, auto... RestMethodPtrs>
+        requires(!std::is_class_v<std::remove_cv_t<decltype(FirstMethodPtr)>>
+            && (!std::is_class_v<std::remove_cv_t<decltype(RestMethodPtrs)>> && ...))
+    ClassBuilder& def_generic()
     {
         return def_generic<FirstMethodPtr, RestMethodPtrs...>(detail::function_export_name<FirstMethodPtr>());
     }
 
     template <auto FirstMethodPtr, auto... RestMethodPtrs, typename... Options>
+        requires(!std::is_class_v<std::remove_cv_t<decltype(FirstMethodPtr)>>
+            && (!std::is_class_v<std::remove_cv_t<decltype(RestMethodPtrs)>> && ...))
     ClassBuilder& def_generic(std::string_view name, Options&&... options)
     {
         const auto def_options = make_method_def_options(std::forward<Options>(options)...);
@@ -717,6 +774,30 @@ public:
             add_generic_method_instantiation_auto<MethodPtr>(
                 name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index));
         });
+        return *this;
+    }
+
+    template <auto MethodResolver, typename FirstSpec, typename... RestSpecs>
+        requires(std::is_class_v<std::remove_cv_t<decltype(MethodResolver)>>)
+    ClassBuilder& def_generic()
+    {
+        constexpr auto first_method_ptr = detail::resolve_nontype_from_spec<MethodResolver, FirstSpec>();
+        return def_generic<MethodResolver, FirstSpec, RestSpecs...>(
+            detail::function_export_name<first_method_ptr>());
+    }
+
+    template <auto MethodResolver, typename FirstSpec, typename... RestSpecs, typename... Options>
+        requires(std::is_class_v<std::remove_cv_t<decltype(MethodResolver)>>)
+    ClassBuilder& def_generic(std::string_view name, Options&&... options)
+    {
+        const auto def_options = make_method_def_options(std::forward<Options>(options)...);
+        add_generic_method_instantiation_auto<detail::resolve_nontype_from_spec<MethodResolver, FirstSpec>()>(
+            name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, 0));
+
+        std::size_t index = 1;
+        (add_generic_method_instantiation_auto<detail::resolve_nontype_from_spec<MethodResolver, RestSpecs>()>(
+             name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index++)),
+            ...);
         return *this;
     }
 
@@ -1235,13 +1316,34 @@ public:
         return *this;
     }
 
-    template <auto FirstMethodPtr, auto... RestMethodPtrs> GenericClassBuilder& def()
+    template <auto FirstMethodPtr, auto... RestMethodPtrs>
+        requires(!std::is_class_v<std::remove_cv_t<decltype(FirstMethodPtr)>>
+            && (!std::is_class_v<std::remove_cv_t<decltype(RestMethodPtrs)>> && ...))
+    GenericClassBuilder& def()
     {
-        return def<FirstMethodPtr, RestMethodPtrs...>(detail::function_export_name<FirstMethodPtr>());
+        return def_generic<FirstMethodPtr, RestMethodPtrs...>(detail::function_export_name<FirstMethodPtr>());
     }
 
     template <auto FirstMethodPtr, auto... RestMethodPtrs, typename... Options>
+        requires(!std::is_class_v<std::remove_cv_t<decltype(FirstMethodPtr)>>
+            && (!std::is_class_v<std::remove_cv_t<decltype(RestMethodPtrs)>> && ...))
     GenericClassBuilder& def(std::string_view name, Options&&... options)
+    {
+        return def_generic<FirstMethodPtr, RestMethodPtrs...>(name, std::forward<Options>(options)...);
+    }
+
+    template <auto FirstMethodPtr, auto... RestMethodPtrs>
+        requires(!std::is_class_v<std::remove_cv_t<decltype(FirstMethodPtr)>>
+            && (!std::is_class_v<std::remove_cv_t<decltype(RestMethodPtrs)>> && ...))
+    GenericClassBuilder& def_generic()
+    {
+        return def_generic<FirstMethodPtr, RestMethodPtrs...>(detail::function_export_name<FirstMethodPtr>());
+    }
+
+    template <auto FirstMethodPtr, auto... RestMethodPtrs, typename... Options>
+        requires(!std::is_class_v<std::remove_cv_t<decltype(FirstMethodPtr)>>
+            && (!std::is_class_v<std::remove_cv_t<decltype(RestMethodPtrs)>> && ...))
+    GenericClassBuilder& def_generic(std::string_view name, Options&&... options)
     {
         constexpr std::size_t method_count = 1 + sizeof...(RestMethodPtrs);
         constexpr std::size_t class_count = sizeof...(ClassTypes);
@@ -1261,7 +1363,43 @@ public:
         return *this;
     }
 
+    template <auto MethodResolver, typename... Options>
+        requires(std::is_class_v<std::remove_cvref_t<decltype(MethodResolver)>>)
+    GenericClassBuilder& def_generic(std::string_view name, Options&&... options)
+    {
+        auto options_tuple = std::make_tuple(std::forward<Options>(options)...);
+        def_generic_with_resolver<MethodResolver>(name, options_tuple, std::index_sequence_for<ClassTypes...>{});
+        return *this;
+    }
+
+    template <auto MethodResolver, typename... Options>
+        requires(std::is_class_v<std::remove_cvref_t<decltype(MethodResolver)>>)
+    GenericClassBuilder& def(std::string_view name, Options&&... options)
+    {
+        return def_generic<MethodResolver>(name, std::forward<Options>(options)...);
+    }
+
 private:
+    template <auto MethodResolver, typename OptionsTuple, std::size_t... Indices>
+    void def_generic_with_resolver(
+        std::string_view name, const OptionsTuple& options_tuple, std::index_sequence<Indices...>)
+    {
+        (def_generic_with_resolver_for_index<MethodResolver, Indices>(name, options_tuple), ...);
+    }
+
+    template <auto MethodResolver, std::size_t Index, typename OptionsTuple>
+    void def_generic_with_resolver_for_index(std::string_view name, const OptionsTuple& options_tuple)
+    {
+        using ClassType = std::tuple_element_t<Index, std::tuple<ClassTypes...>>;
+        constexpr auto method_ptr = MethodResolver.template operator()<ClassType>();
+        ClassBuilder class_builder(*owner_, module_decl_->classes[class_indices_[Index]]);
+        std::apply(
+            [&]<typename... OptionTypes>(const OptionTypes&... unpacked_options) {
+                class_builder.template def<method_ptr>(name, unpacked_options...);
+            },
+            options_tuple);
+    }
+
     BindingsGenerator* owner_;
     ModuleDecl* module_decl_;
     std::vector<std::size_t> class_indices_;
@@ -1356,6 +1494,28 @@ GenericClassBuilder<FirstClass, RestClasses...> ModuleBuilder::class_generic(std
 
     return GenericClassBuilder<FirstClass, RestClasses...>(
         *owner_, *module_decl_, std::move(instantiation_indices), group_name);
+}
+
+template <template <typename...> typename ClassTemplate, typename FirstSpec, typename... RestSpecs>
+GenericClassBuilder<
+    detail::instantiate_template_from_spec_t<ClassTemplate, FirstSpec>,
+    detail::instantiate_template_from_spec_t<ClassTemplate, RestSpecs>...>
+ModuleBuilder::class_generic()
+{
+    return class_generic<
+        detail::instantiate_template_from_spec_t<ClassTemplate, FirstSpec>,
+        detail::instantiate_template_from_spec_t<ClassTemplate, RestSpecs>...>();
+}
+
+template <template <typename...> typename ClassTemplate, typename FirstSpec, typename... RestSpecs>
+GenericClassBuilder<
+    detail::instantiate_template_from_spec_t<ClassTemplate, FirstSpec>,
+    detail::instantiate_template_from_spec_t<ClassTemplate, RestSpecs>...>
+ModuleBuilder::class_generic(std::string_view name)
+{
+    return class_generic<
+        detail::instantiate_template_from_spec_t<ClassTemplate, FirstSpec>,
+        detail::instantiate_template_from_spec_t<ClassTemplate, RestSpecs>...>(name);
 }
 
 template <typename EnumType>

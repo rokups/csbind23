@@ -287,12 +287,12 @@ inline void register_bindings_vector(BindingsGenerator& generator, std::string_v
     }
 )");
 
-    module.class_generic<std::vector<int>, std::vector<double>, std::vector<vector_tests::VectorItem>>("VectorList")
+    module.class_generic<std::vector, int, double, vector_tests::VectorItem>("VectorList")
         .ctor<>()
         .csharp_interface("System.Collections.Generic.IList<T>")
         .csharp_interface("System.Collections.Generic.IReadOnlyList<T>")
-        .def<&std::vector<int>::size, &std::vector<double>::size, &std::vector<vector_tests::VectorItem>::size>("size", csbind23::Private{})
-        .def<&std::vector<int>::clear, &std::vector<double>::clear, &std::vector<vector_tests::VectorItem>::clear>("clear", csbind23::Private{})
+        .def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", csbind23::Private{})
+        .def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("clear", csbind23::Private{})
         .def<&vector_tests::add_int, &vector_tests::add_double, &vector_tests::add_item>(
             "__add",
             csbind23::Private{})

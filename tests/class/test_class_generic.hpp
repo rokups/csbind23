@@ -112,6 +112,28 @@ private:
     T value_{};
 };
 
+template <typename T, typename U>
+class GenericPair
+{
+public:
+    GenericPair() = default;
+
+    void set(T left, U right)
+    {
+        left_ = left;
+        right_ = right;
+    }
+
+    double sum_as_double() const
+    {
+        return static_cast<double>(left_) + static_cast<double>(right_);
+    }
+
+private:
+    T left_{};
+    U right_{};
+};
+
 class RefGenericOps
 {
 public:
@@ -135,6 +157,12 @@ public:
             *value = static_cast<T>(*value + delta);
         }
     }
+
+    template <typename T, typename U>
+    U add_mixed(T left, U right) const
+    {
+        return static_cast<U>(left) + right;
+    }
 };
 
 } // namespace csbind23::testing::class_generic
@@ -149,54 +177,63 @@ inline void register_bindings_class_generic(BindingsGenerator& generator, std::s
         .pinvoke_library("e2e.C")
         .cabi_include("\"tests/class/test_class_generic.hpp\"");
 
-    module.class_generic<class_generic::GenericCounter<int>, class_generic::GenericCounter<double>>("GenericCounter")
+    module.class_generic<class_generic::GenericCounter, int, double>("GenericCounter")
         .ctor<>()
-        .def<&class_generic::GenericCounter<int>::set, &class_generic::GenericCounter<double>::set>("set")
-        .def<&class_generic::GenericCounter<int>::add, &class_generic::GenericCounter<double>::add>("add")
-        .def<&class_generic::GenericCounter<int>::get, &class_generic::GenericCounter<double>::get>("get")
-        .def<&class_generic::GenericCounter<int>::add_into_int_ref,
-            &class_generic::GenericCounter<double>::add_into_int_ref>("add_into_int_ref")
-        .def<&class_generic::GenericCounter<int>::add_into_value_ref,
-            &class_generic::GenericCounter<double>::add_into_value_ref>("add_into_value_ref")
-        .def<&class_generic::GenericCounter<int>::add_pair_into_value_out,
-            &class_generic::GenericCounter<double>::add_pair_into_value_out>(
+        .def_generic<[]<typename ClassType>() { return &ClassType::set; }>("set")
+        .def_generic<[]<typename ClassType>() { return &ClassType::add; }>("add")
+        .def_generic<[]<typename ClassType>() { return &ClassType::get; }>("get")
+        .def_generic<[]<typename ClassType>() { return &ClassType::add_into_int_ref; }>("add_into_int_ref")
+        .def_generic<[]<typename ClassType>() { return &ClassType::add_into_value_ref; }>("add_into_value_ref")
+        .def_generic<[]<typename ClassType>() { return &ClassType::add_pair_into_value_out; }>(
             "add_pair_into_value_out",
             csbind23::Arg{.idx = 1, .name = "result", .output = true})
-        .def<&class_generic::GenericCounter<int>::add_into_value_ptr,
-            &class_generic::GenericCounter<double>::add_into_value_ptr>("add_into_value_ptr")
-        .def<&class_generic::GenericCounter<int>::describe, &class_generic::GenericCounter<double>::describe>(
+        .def_generic<[]<typename ClassType>() { return &ClassType::add_into_value_ptr; }>("add_into_value_ptr")
+        .def_generic<[]<typename ClassType>() { return &ClassType::describe; }>(
             "describe")
-        .def<&class_generic::GenericCounter<int>::cast_add_int, &class_generic::GenericCounter<double>::cast_add_int>(
+        .def_generic<[]<typename ClassType>() { return &ClassType::cast_add_int; }>(
             "cast_add_int")
-        .def<&class_generic::GenericCounter<int>::cast_add_double,
-            &class_generic::GenericCounter<double>::cast_add_double>("cast_add_double")
-        .def<&class_generic::GenericCounter<int>::mutate_and_cast_int,
-            &class_generic::GenericCounter<double>::mutate_and_cast_int>("mutate_and_cast_int")
-        .def<&class_generic::GenericCounter<int>::mutate_and_cast_double,
-            &class_generic::GenericCounter<double>::mutate_and_cast_double>("mutate_and_cast_double")
-        .def<&class_generic::GenericCounter<int>::add_pair_int_double,
-            &class_generic::GenericCounter<double>::add_pair_int_double>("add_pair_int_double")
-        .def<&class_generic::GenericCounter<int>::add_pair_double_int,
-            &class_generic::GenericCounter<double>::add_pair_double_int>("add_pair_double_int");
+        .def_generic<[]<typename ClassType>() { return &ClassType::cast_add_double; }>("cast_add_double")
+        .def_generic<[]<typename ClassType>() { return &ClassType::mutate_and_cast_int; }>("mutate_and_cast_int")
+        .def_generic<[]<typename ClassType>() { return &ClassType::mutate_and_cast_double; }>(
+            "mutate_and_cast_double")
+        .def_generic<[]<typename ClassType>() { return &ClassType::add_pair_int_double; }>("add_pair_int_double")
+        .def_generic<[]<typename ClassType>() { return &ClassType::add_pair_double_int; }>("add_pair_double_int");
+
+    module.class_generic<
+            class_generic::GenericPair,
+            csbind23::TemplateArgs<int, double>,
+            csbind23::TemplateArgs<double, int>>("GenericPair")
+        .ctor<>()
+        .def_generic<[]<typename ClassType>() { return &ClassType::set; }>("set")
+        .def_generic<[]<typename ClassType>() { return &ClassType::sum_as_double; }>("sum_as_double");
 
     module.class_<class_generic::RefGenericOps>()
         .ctor<>()
         .def_generic<
-            &class_generic::RefGenericOps::add_to_ref<int>,
-            &class_generic::RefGenericOps::add_to_ref<double>>(
+            []<typename T>() { return &class_generic::RefGenericOps::add_to_ref<T>; },
+            int,
+            double>(
             "add_to_ref_generic",
             csbind23::CppSymbols{"add_to_ref<int>", "add_to_ref<double>"})
         .def_generic<
-            &class_generic::RefGenericOps::add_to_out<int>,
-            &class_generic::RefGenericOps::add_to_out<double>>(
+            []<typename T>() { return &class_generic::RefGenericOps::add_to_out<T>; },
+            int,
+            double>(
             "add_to_out_generic",
             csbind23::CppSymbols{"add_to_out<int>", "add_to_out<double>"},
             csbind23::Arg{.idx = 2, .name = "result", .output = true})
         .def_generic<
-            &class_generic::RefGenericOps::add_to_ptr<int>,
-            &class_generic::RefGenericOps::add_to_ptr<double>>(
+            []<typename T>() { return &class_generic::RefGenericOps::add_to_ptr<T>; },
+            int,
+            double>(
             "add_to_ptr_generic",
-            csbind23::CppSymbols{"add_to_ptr<int>", "add_to_ptr<double>"});
+            csbind23::CppSymbols{"add_to_ptr<int>", "add_to_ptr<double>"})
+        .def_generic<
+            []<typename T, typename U>() { return &class_generic::RefGenericOps::add_mixed<T, U>; },
+            csbind23::TemplateArgs<int, double>,
+            csbind23::TemplateArgs<double, int>>(
+            "add_mixed_generic",
+            csbind23::CppSymbols{"add_mixed<int, double>", "add_mixed<double, int>"});
 }
 
 } // namespace csbind23::testing

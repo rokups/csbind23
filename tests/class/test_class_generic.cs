@@ -127,6 +127,25 @@ public class ClassGenericTests
     }
 
     [Fact]
+    public void GenericClass_TwoTypeParameter_Class_Dispatches()
+    {
+        using var pair1 = new GenericPair<int, double>();
+        pair1.set(2, 3.5);
+        Assert.Equal(5.5, pair1.sum_as_double());
+
+        using var pair2 = new GenericPair<double, int>();
+        pair2.set(4.25, 3);
+        Assert.Equal(7.25, pair2.sum_as_double());
+    }
+
+    [Fact]
+    public void GenericClass_TwoTypeParameter_Class_Throws_For_Unmapped_Tuple()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => new GenericPair<int, int>());
+        Assert.Contains("GenericPair", ex.Message);
+    }
+
+    [Fact]
     public void GenericMethod_On_NonGenericClass_RefParameter_Dispatches()
     {
         using var ops = new RefGenericOps();
@@ -183,5 +202,23 @@ public class ClassGenericTests
         var doubleByPtr = 2.0;
         ops.add_to_ptr_generic<double>(ref doubleByPtr, 0.5);
         Assert.Equal(2.5, doubleByPtr);
+    }
+
+    [Fact]
+    public void GenericMethod_On_NonGenericClass_TwoTypeParameter_Dispatches()
+    {
+        using var ops = new RefGenericOps();
+
+        Assert.Equal(4.5, ops.add_mixed_generic<int, double>(2, 2.5));
+        Assert.Equal(7, ops.add_mixed_generic<double, int>(2.5, 5));
+    }
+
+    [Fact]
+    public void GenericMethod_On_NonGenericClass_TwoTypeParameter_Throws_Unmapped()
+    {
+        using var ops = new RefGenericOps();
+        var ex = Assert.Throws<NotSupportedException>(() => ops.add_mixed_generic<int, int>(2, 3));
+        Assert.Contains("add_mixed_generic", ex.Message);
+        Assert.Contains("Expected type tuples", ex.Message);
     }
 }
