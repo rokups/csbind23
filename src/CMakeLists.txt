@@ -4,7 +4,11 @@ target_sources(csbind23
     PRIVATE
         bindings_generator.cpp
         emit/cabi_emitter.cpp
-    emit/csharp_naming.cpp
+        emit/cabi_emitter_utils.cpp
+        emit/emitter_ir_utils.cpp
+        emit/csharp_naming.cpp
+        emit/csharp_emitter_text_utils.cpp
+        emit/generic_dispatch_utils.cpp
         emit/csharp_emitter.cpp
 )
 

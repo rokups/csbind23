@@ -1,5 +1,7 @@
 #include "csbind23/emit/cabi_emitter.hpp"
 
+#include "cabi_emitter_utils.hpp"
+
 #include "csbind23/text_writer.hpp"
 
 #include <filesystem>
@@ -7,92 +9,12 @@
 #include <fstream>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 namespace csbind23::emit
 {
 namespace
 {
-
-std::string render_cpp_type(const TypeRef& type_ref)
-{
-    std::string rendered;
-    if (type_ref.is_const)
-    {
-        rendered += "const ";
-    }
-    rendered += type_ref.cpp_name;
-    if (type_ref.is_pointer)
-    {
-        rendered += "*";
-    }
-    if (type_ref.is_reference)
-    {
-        rendered += "&";
-    }
-    return rendered;
-}
-
-std::string render_converted_argument_name(std::size_t index)
-{
-    return std::format("__csbind23_arg{}_cpp", index);
-}
-
-std::string render_callback_argument_name(std::size_t index)
-{
-    return std::format("__csbind23_arg{}_c", index);
-}
-
-std::string exported_symbol_name(const FunctionDecl& function_decl)
-{
-    return function_decl.exported_name.empty() ? function_decl.name : function_decl.exported_name;
-}
-
-std::size_t normalized_trailing_default_count(const FunctionDecl& function_decl)
-{
-    return function_decl.trailing_default_argument_count > function_decl.parameters.size()
-        ? function_decl.parameters.size()
-        : function_decl.trailing_default_argument_count;
-}
-
-std::vector<ParameterDecl> leading_parameters(const FunctionDecl& function_decl, std::size_t parameter_count)
-{
-    const std::size_t clamped = parameter_count > function_decl.parameters.size()
-        ? function_decl.parameters.size()
-        : parameter_count;
-    return std::vector<ParameterDecl>(function_decl.parameters.begin(), function_decl.parameters.begin() + clamped);
-}
-
-void append_converted_arguments(TextWriter& output, const std::vector<ParameterDecl>& parameters)
-{
-    for (std::size_t index = 0; index < parameters.size(); ++index)
-    {
-        const auto& parameter = parameters[index];
-        const auto converted_name = render_converted_argument_name(index);
-        const auto rendered_cpp_type = render_cpp_type(parameter.type);
-
-        output.append_line_format(
-            "    decltype(auto) {} = csbind23::cabi::Converter<{}>::from_c_abi({});",
-            converted_name,
-            rendered_cpp_type,
-            parameter.name);
-    }
-}
-
-std::string render_call_arguments(const std::vector<ParameterDecl>& parameters)
-{
-    std::string arguments;
-    for (std::size_t index = 0; index < parameters.size(); ++index)
-    {
-        arguments += render_converted_argument_name(index);
-        if (index + 1 < parameters.size())
-        {
-            arguments += ", ";
-        }
-    }
-    return arguments;
-}
 
 void append_function_signature(
     TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, std::size_t parameter_count)
@@ -142,138 +64,6 @@ void append_free_function_body(TextWriter& output, const FunctionDecl& function_
     output.append_line_format("    decltype(auto) result = {}({});", function_decl.cpp_symbol, call_arguments);
     output.append_line_format(
         "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(function_decl.return_type));
-}
-
-const ClassDecl* find_class_by_cpp_name(const ModuleDecl& module_decl, std::string_view cpp_name)
-{
-    for (const auto& class_decl : module_decl.classes)
-    {
-        if (class_decl.cpp_name == cpp_name)
-        {
-            return &class_decl;
-        }
-    }
-    return nullptr;
-}
-
-std::vector<const ClassDecl*> secondary_base_classes(const ModuleDecl& module_decl, const ClassDecl& class_decl)
-{
-    std::vector<const ClassDecl*> bases;
-    if (!class_decl.base_classes.empty())
-    {
-        for (std::size_t index = 1; index < class_decl.base_classes.size(); ++index)
-        {
-            const auto* base_class = find_class_by_cpp_name(module_decl, class_decl.base_classes[index].cpp_name);
-            if (base_class != nullptr)
-            {
-                bases.push_back(base_class);
-            }
-        }
-    }
-    return bases;
-}
-
-bool is_wrapper_visible_method(const FunctionDecl& method_decl)
-{
-    return !method_decl.is_constructor && method_decl.is_method && !method_decl.is_property_getter
-        && !method_decl.is_property_setter;
-}
-
-std::string method_signature_key(const FunctionDecl& method_decl)
-{
-    std::string key = method_decl.name;
-    key += method_decl.is_const ? "|const|" : "|mutable|";
-    key += method_decl.return_type.c_abi_name;
-    key += "|";
-    for (const auto& parameter : method_decl.parameters)
-    {
-        key += parameter.type.c_abi_name;
-        key += parameter.type.is_const ? "#c" : "#m";
-        key += parameter.type.is_pointer ? "#p" : "#v";
-        key += parameter.type.is_reference ? "#r" : "#v";
-        key += ";";
-    }
-    return key;
-}
-
-struct EmittedMethod
-{
-    FunctionDecl method;
-    bool inherited_from_secondary_base = false;
-};
-
-std::vector<EmittedMethod> collect_emitted_methods(const ModuleDecl& module_decl, const ClassDecl& class_decl)
-{
-    std::vector<EmittedMethod> emitted_methods;
-    emitted_methods.reserve(class_decl.methods.size());
-
-    std::unordered_set<std::string> signatures;
-    for (const auto& method_decl : class_decl.methods)
-    {
-        if (method_decl.is_constructor || !method_decl.is_method)
-        {
-            continue;
-        }
-
-        if (is_wrapper_visible_method(method_decl))
-        {
-            signatures.insert(method_signature_key(method_decl));
-        }
-        emitted_methods.push_back(EmittedMethod{method_decl, false});
-    }
-
-    for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
-    {
-        for (const auto& base_method : secondary_base->methods)
-        {
-            if (!is_wrapper_visible_method(base_method))
-            {
-                continue;
-            }
-
-            const std::string signature = method_signature_key(base_method);
-            if (signatures.contains(signature))
-            {
-                continue;
-            }
-
-            signatures.insert(signature);
-            FunctionDecl inherited_method = base_method;
-            inherited_method.class_name = secondary_base->cpp_name;
-            emitted_methods.push_back(EmittedMethod{std::move(inherited_method), true});
-        }
-    }
-
-    return emitted_methods;
-}
-
-std::vector<const FunctionDecl*> collect_virtual_methods(
-    const ClassDecl& class_decl, const std::vector<EmittedMethod>& emitted_methods)
-{
-    std::vector<const FunctionDecl*> methods;
-    for (const auto& emitted_method : emitted_methods)
-    {
-        const auto& method_decl = emitted_method.method;
-        if (method_decl.is_constructor || !method_decl.is_method || !method_decl.allow_override)
-        {
-            continue;
-        }
-
-        if (!class_decl.enable_virtual_overrides && !emitted_method.inherited_from_secondary_base)
-        {
-            continue;
-        }
-
-        methods.push_back(&emitted_method.method);
-    }
-
-    return methods;
-}
-
-std::string callback_typedef_name(
-    const std::string& module_name, const std::string& class_name, const FunctionDecl& method_decl)
-{
-    return std::format("{}_{}_Callback_{}", module_name, class_name, method_decl.virtual_slot_name);
 }
 
 void append_virtual_callback_typedef(

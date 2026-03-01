@@ -1,6 +1,10 @@
 #include "csbind23/emit/csharp_emitter.hpp"
 #include "csbind23/emit/csharp_naming.hpp"
 
+#include "csharp_emitter_text_utils.hpp"
+#include "emitter_ir_utils.hpp"
+#include "generic_dispatch_utils.hpp"
+
 #include "csbind23/cabi/converter.hpp"
 #include "csbind23/text_writer.hpp"
 
@@ -346,11 +350,6 @@ std::string pinvoke_return_type(const FunctionDecl& function_decl)
     return function_decl.return_type.pinvoke_name;
 }
 
-std::string exported_symbol_name(const FunctionDecl& function_decl)
-{
-    return function_decl.exported_name.empty() ? function_decl.name : function_decl.exported_name;
-}
-
 std::string wrapper_type_name(const TypeRef& type_ref)
 {
     if (type_ref.has_managed_converter() && !type_ref.managed_type_name.empty())
@@ -431,18 +430,6 @@ std::string reflection_parameter_type_expression(const ParameterDecl& parameter)
     return type_expression;
 }
 
-const ClassDecl* find_class_by_cpp_name(const ModuleDecl& module_decl, std::string_view cpp_name)
-{
-    for (const auto& class_decl : module_decl.classes)
-    {
-        if (class_decl.cpp_name == cpp_name)
-        {
-            return &class_decl;
-        }
-    }
-    return nullptr;
-}
-
 const ClassDecl* primary_base_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
     if (!class_decl.base_classes.empty())
@@ -458,57 +445,13 @@ const ClassDecl* primary_base_class(const ModuleDecl& module_decl, const ClassDe
     return nullptr;
 }
 
-std::vector<const ClassDecl*> secondary_base_classes(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+MethodCollectionOptions csharp_method_collection_options()
 {
-    std::vector<const ClassDecl*> bases;
-    if (!class_decl.base_classes.empty())
-    {
-        for (std::size_t index = 1; index < class_decl.base_classes.size(); ++index)
-        {
-            const auto* base_class = find_class_by_cpp_name(module_decl, class_decl.base_classes[index].cpp_name);
-            if (base_class != nullptr)
-            {
-                bases.push_back(base_class);
-            }
-        }
-    }
-    return bases;
+    MethodCollectionOptions options;
+    options.exclude_pinvoke_only = true;
+    options.signature_kind = MethodSignatureKind::PInvoke;
+    return options;
 }
-
-bool is_wrapper_visible_method(const FunctionDecl& method_decl)
-{
-    return !method_decl.is_constructor && method_decl.is_method && !method_decl.is_property_getter
-    && !method_decl.is_property_setter && !method_decl.pinvoke_only;
-}
-
-std::string method_signature_key(const FunctionDecl& method_decl)
-{
-    std::string key = method_decl.name;
-    key += method_decl.is_const ? "|const|" : "|mutable|";
-    key += method_decl.return_type.pinvoke_name;
-    key += "|";
-    for (const auto& parameter : method_decl.parameters)
-    {
-        key += parameter.type.pinvoke_name;
-        key += parameter.type.is_const ? "#c" : "#m";
-        key += parameter.type.is_pointer ? "#p" : "#v";
-        key += parameter.type.is_reference ? "#r" : "#v";
-        key += ";";
-    }
-    return key;
-}
-
-struct EmittedMethod
-{
-    FunctionDecl method;
-    bool inherited_from_secondary_base = false;
-};
-
-struct GenericFunctionGroup
-{
-    std::string name;
-    std::vector<const FunctionDecl*> instantiations;
-};
 
 struct GenericClassGroup
 {
@@ -599,51 +542,6 @@ std::vector<GenericClassGroup> collect_generic_class_groups(const std::vector<Cl
     return groups;
 }
 
-std::vector<EmittedMethod> collect_emitted_methods(const ModuleDecl& module_decl, const ClassDecl& class_decl)
-{
-    std::vector<EmittedMethod> emitted_methods;
-    emitted_methods.reserve(class_decl.methods.size());
-
-    std::unordered_set<std::string> signatures;
-    for (const auto& method_decl : class_decl.methods)
-    {
-        if (method_decl.is_constructor || !method_decl.is_method)
-        {
-            continue;
-        }
-
-        if (is_wrapper_visible_method(method_decl))
-        {
-            signatures.insert(method_signature_key(method_decl));
-        }
-        emitted_methods.push_back(EmittedMethod{method_decl, false});
-    }
-
-    for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
-    {
-        for (const auto& base_method : secondary_base->methods)
-        {
-            if (!is_wrapper_visible_method(base_method))
-            {
-                continue;
-            }
-
-            const std::string signature = method_signature_key(base_method);
-            if (signatures.contains(signature))
-            {
-                continue;
-            }
-
-            signatures.insert(signature);
-            FunctionDecl inherited_method = base_method;
-            inherited_method.class_name = secondary_base->cpp_name;
-            emitted_methods.push_back(EmittedMethod{std::move(inherited_method), true});
-        }
-    }
-
-    return emitted_methods;
-}
-
 const ClassDecl* find_pointer_class_return(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
 {
     const auto& return_type = function_decl.return_type;
@@ -673,144 +571,6 @@ std::string wrapper_return_type(const ModuleDecl& module_decl, const FunctionDec
     }
 
     return wrapper_type_name(function_decl.return_type);
-}
-
-std::string replace_all(std::string value, std::string_view from, std::string_view to)
-{
-    std::size_t start = 0;
-    while (true)
-    {
-        const std::size_t index = value.find(from, start);
-        if (index == std::string::npos)
-        {
-            break;
-        }
-        value.replace(index, from.size(), to);
-        start = index + to.size();
-    }
-    return value;
-}
-
-std::string render_inline_template(
-    std::string templ, std::string_view managed_name, std::string_view pinvoke_name, std::string_view value_name,
-    std::string_view module_name)
-{
-    templ = replace_all(std::move(templ), "{managed}", managed_name);
-    templ = replace_all(std::move(templ), "{pinvoke}", pinvoke_name);
-    templ = replace_all(std::move(templ), "{value}", value_name);
-    templ = replace_all(std::move(templ), "{module}", module_name);
-    return templ;
-}
-
-std::vector<std::string> split_trimmed_lines(std::string_view text)
-{
-    std::vector<std::string> lines;
-    std::size_t start = 0;
-    while (start <= text.size())
-    {
-        std::size_t end = text.find('\n', start);
-        if (end == std::string_view::npos)
-        {
-            end = text.size();
-        }
-
-        std::string_view line = text.substr(start, end - start);
-        if (!line.empty() && line.back() == '\r')
-        {
-            line.remove_suffix(1);
-        }
-
-        const std::size_t first_non_ws = line.find_first_not_of(" \t");
-        if (first_non_ws != std::string_view::npos)
-        {
-            lines.emplace_back(line.substr(first_non_ws));
-        }
-
-        if (end == text.size())
-        {
-            break;
-        }
-        start = end + 1;
-    }
-
-    return lines;
-}
-
-void append_embedded_statement(TextWriter& output, std::string_view indent, std::string_view statement)
-{
-    const auto lines = split_trimmed_lines(statement);
-    for (const auto& line : lines)
-    {
-        if (!line.empty() && line.back() == ';')
-        {
-            output.append_line_format("{}{}", indent, line);
-        }
-        else
-        {
-            output.append_line_format("{}{};", indent, line);
-        }
-    }
-}
-
-void append_embedded_assignment(
-    TextWriter& output, std::string_view indent, std::string_view assignment_prefix, std::string_view expression)
-{
-    const auto lines = split_trimmed_lines(expression);
-    if (lines.empty())
-    {
-        output.append_line_format("{}{};", indent, assignment_prefix);
-        return;
-    }
-
-    if (lines.size() == 1)
-    {
-        output.append_line_format("{}{}{};", indent, assignment_prefix, lines[0]);
-        return;
-    }
-
-    output.append_line_format("{}{}{}", indent, assignment_prefix, lines[0]);
-    for (std::size_t index = 1; index + 1 < lines.size(); ++index)
-    {
-        output.append_line_format("{}{}", indent, lines[index]);
-    }
-    output.append_line_format("{}{};", indent, lines.back());
-}
-
-void append_embedded_return(TextWriter& output, std::string_view indent, std::string_view expression)
-{
-    const auto lines = split_trimmed_lines(expression);
-    if (lines.empty())
-    {
-        output.append_line_format("{}return;", indent);
-        return;
-    }
-
-    if (lines.size() == 1)
-    {
-        output.append_line_format("{}return {};", indent, lines[0]);
-        return;
-    }
-
-    output.append_line_format("{}return {}", indent, lines[0]);
-    for (std::size_t index = 1; index + 1 < lines.size(); ++index)
-    {
-        output.append_line_format("{}{}", indent, lines[index]);
-    }
-    output.append_line_format("{}{};", indent, lines.back());
-}
-
-std::string join_arguments(const std::vector<std::string>& arguments)
-{
-    std::string rendered;
-    for (std::size_t index = 0; index < arguments.size(); ++index)
-    {
-        rendered += arguments[index];
-        if (index + 1 < arguments.size())
-        {
-            rendered += ", ";
-        }
-    }
-    return rendered;
 }
 
 std::string default_variant_condition(std::size_t omitted, const std::vector<std::string>& has_value_expressions)
@@ -1172,327 +932,6 @@ std::string optional_parameter_has_value_expression(
     }
 
     return parameter.name + " != null";
-}
-
-std::vector<const FunctionDecl*> collect_virtual_methods(
-    const ClassDecl& class_decl, const std::vector<EmittedMethod>& emitted_methods)
-{
-    std::vector<const FunctionDecl*> methods;
-    for (const auto& emitted_method : emitted_methods)
-    {
-        const auto& method_decl = emitted_method.method;
-        if (method_decl.is_constructor || !method_decl.is_method || !method_decl.allow_override)
-        {
-            continue;
-        }
-
-        if (!class_decl.enable_virtual_overrides && !emitted_method.inherited_from_secondary_base)
-        {
-            continue;
-        }
-
-        methods.push_back(&emitted_method.method);
-    }
-
-    return methods;
-}
-
-struct GenericDispatchShape
-{
-    bool supported = false;
-    std::vector<int> generic_parameter_slot_ids;
-    int generic_return_slot_id = -1;
-    std::size_t generic_arity = 0;
-    std::string unsupported_reason;
-};
-
-std::string concrete_type_for_slot(
-    const FunctionDecl& instantiation, const GenericDispatchShape& shape, int slot_id);
-
-std::string csharp_string_literal_escape(std::string_view text)
-{
-    std::string escaped;
-    escaped.reserve(text.size() + 16);
-    for (const char ch : text)
-    {
-        switch (ch)
-        {
-        case '\\':
-            escaped += "\\\\";
-            break;
-        case '"':
-            escaped += "\\\"";
-            break;
-        case '\n':
-            escaped += "\\n";
-            break;
-        case '\r':
-            escaped += "\\r";
-            break;
-        case '\t':
-            escaped += "\\t";
-            break;
-        default:
-            escaped += ch;
-            break;
-        }
-    }
-    return escaped;
-}
-
-std::string generic_expected_type_tuples(const GenericFunctionGroup& group, const GenericDispatchShape& shape)
-{
-    if (shape.generic_arity == 0)
-    {
-        return {};
-    }
-
-    std::vector<std::string> tuples;
-    tuples.reserve(group.instantiations.size());
-    for (const auto* instantiation : group.instantiations)
-    {
-        std::string tuple = "(";
-        for (std::size_t slot = 0; slot < shape.generic_arity; ++slot)
-        {
-            if (slot > 0)
-            {
-                tuple += ", ";
-            }
-            tuple += concrete_type_for_slot(*instantiation, shape, static_cast<int>(slot));
-        }
-        tuple += ")";
-        tuples.push_back(std::move(tuple));
-    }
-
-    std::sort(tuples.begin(), tuples.end());
-    tuples.erase(std::unique(tuples.begin(), tuples.end()), tuples.end());
-    return join_arguments(tuples);
-}
-
-std::string generic_dispatch_not_supported_message(
-    const ModuleDecl& module_decl, CSharpNameKind name_kind, const GenericFunctionGroup& group,
-    const GenericDispatchShape& shape)
-{
-    std::string message = std::format(
-        "No generic mapping for {} with provided generic type arguments.",
-        managed_name(module_decl, name_kind, group.name));
-
-    const std::string expected_tuples = generic_expected_type_tuples(group, shape);
-    if (!expected_tuples.empty())
-    {
-        message += std::format(" Expected type tuples: {}.", expected_tuples);
-    }
-
-    if (!shape.supported && !shape.unsupported_reason.empty())
-    {
-        message += std::format(" Dispatch shape is not supported: {}.", shape.unsupported_reason);
-    }
-
-    return message;
-}
-
-bool same_wrapper_type_shape(const TypeRef& lhs, const TypeRef& rhs)
-{
-    return wrapper_type_name(lhs) == wrapper_type_name(rhs)
-        && lhs.is_const == rhs.is_const
-        && lhs.is_pointer == rhs.is_pointer
-        && lhs.is_reference == rhs.is_reference;
-}
-
-std::string generic_type_parameter_name(std::size_t index, std::size_t generic_arity)
-{
-    if (generic_arity == 1)
-    {
-        return "T";
-    }
-
-    return std::format("T{}", index);
-}
-
-std::string generic_type_parameter_list(std::size_t generic_arity)
-{
-    std::string rendered;
-    for (std::size_t index = 0; index < generic_arity; ++index)
-    {
-        if (index > 0)
-        {
-            rendered += ", ";
-        }
-        rendered += generic_type_parameter_name(index, generic_arity);
-    }
-    return rendered;
-}
-
-std::string concrete_type_for_slot(
-    const FunctionDecl& instantiation, const GenericDispatchShape& shape, int slot_id);
-
-std::string concrete_type_for_slot(
-    const FunctionDecl& instantiation, const GenericDispatchShape& shape, int slot_id)
-{
-    for (std::size_t index = 0; index < instantiation.parameters.size(); ++index)
-    {
-        if (shape.generic_parameter_slot_ids[index] == slot_id)
-        {
-            return wrapper_type_name(instantiation.parameters[index].type);
-        }
-    }
-
-    if (shape.generic_return_slot_id == slot_id)
-    {
-        return wrapper_type_name(instantiation.return_type);
-    }
-
-    return {};
-}
-
-GenericDispatchShape analyze_generic_dispatch_shape(const GenericFunctionGroup& group)
-{
-    GenericDispatchShape shape;
-    if (group.instantiations.empty())
-    {
-        return shape;
-    }
-
-    const FunctionDecl& first = *group.instantiations.front();
-    const std::size_t parameter_count = first.parameters.size();
-    shape.generic_parameter_slot_ids.assign(parameter_count, -1);
-
-    for (const auto* instantiation : group.instantiations)
-    {
-        if (instantiation->parameters.size() != parameter_count)
-        {
-            return GenericDispatchShape{};
-        }
-    }
-
-    std::vector<bool> varying_parameters(parameter_count, false);
-    bool has_unsupported_varying_shape = false;
-
-    for (std::size_t index = 0; index < parameter_count; ++index)
-    {
-        bool all_same = true;
-        const auto& first_parameter = first.parameters[index];
-        for (const auto* instantiation : group.instantiations)
-        {
-            const auto& parameter = instantiation->parameters[index];
-            if (!same_wrapper_type_shape(parameter.type, first_parameter.type))
-            {
-                all_same = false;
-            }
-        }
-
-        if (!all_same)
-        {
-            for (const auto* instantiation : group.instantiations)
-            {
-                const auto& parameter = instantiation->parameters[index];
-                if (parameter.type.has_managed_converter())
-                {
-                    has_unsupported_varying_shape = true;
-                    shape.unsupported_reason = "varying generic slots with managed converters";
-                }
-            }
-
-            varying_parameters[index] = true;
-        }
-    }
-
-    bool varying_return = false;
-    bool return_all_same = true;
-    for (const auto* instantiation : group.instantiations)
-    {
-        const auto& return_type = instantiation->return_type;
-        if (!same_wrapper_type_shape(return_type, first.return_type))
-        {
-            return_all_same = false;
-        }
-    }
-
-    if (!return_all_same)
-    {
-        for (const auto* instantiation : group.instantiations)
-        {
-            const auto& return_type = instantiation->return_type;
-            if (return_type.is_pointer || return_type.is_reference || return_type.has_managed_converter())
-            {
-                has_unsupported_varying_shape = true;
-                shape.unsupported_reason = "varying generic return slots that are pointer/reference/converter-backed";
-            }
-        }
-
-        varying_return = true;
-    }
-
-    bool saw_generic_slot = varying_return;
-    for (const bool varying_parameter : varying_parameters)
-    {
-        saw_generic_slot = saw_generic_slot || varying_parameter;
-    }
-
-    if (!saw_generic_slot)
-    {
-        return GenericDispatchShape{};
-    }
-
-    std::unordered_map<std::string, int> slot_groups;
-    auto assign_slot_group = [&](std::size_t index, bool is_return_slot) {
-        std::string key;
-        for (const auto* instantiation : group.instantiations)
-        {
-            const std::string slot_type = is_return_slot
-                ? wrapper_type_name(instantiation->return_type)
-                : wrapper_type_name(instantiation->parameters[index].type);
-            key += slot_type;
-            key += "|";
-        }
-
-        auto it = slot_groups.find(key);
-        if (it != slot_groups.end())
-        {
-            return it->second;
-        }
-
-        const int group_id = static_cast<int>(slot_groups.size());
-        slot_groups.emplace(std::move(key), group_id);
-        return group_id;
-    };
-
-    for (std::size_t index = 0; index < parameter_count; ++index)
-    {
-        if (!varying_parameters[index])
-        {
-            continue;
-        }
-
-        shape.generic_parameter_slot_ids[index] = assign_slot_group(index, false);
-    }
-
-    if (varying_return)
-    {
-        shape.generic_return_slot_id = assign_slot_group(0, true);
-    }
-
-    shape.generic_arity = slot_groups.size();
-    if (shape.generic_arity == 0)
-    {
-        return GenericDispatchShape{};
-    }
-
-    for (const auto* instantiation : group.instantiations)
-    {
-        for (std::size_t slot = 0; slot < shape.generic_arity; ++slot)
-        {
-            const std::string concrete_type =
-                concrete_type_for_slot(*instantiation, shape, static_cast<int>(slot));
-            if (concrete_type.empty())
-            {
-                return GenericDispatchShape{};
-            }
-        }
-    }
-
-    shape.supported = saw_generic_slot && !has_unsupported_varying_shape;
-    return shape;
 }
 
 void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& module_decl, const GenericFunctionGroup& group)
@@ -1908,7 +1347,7 @@ std::vector<GenericFunctionGroup> collect_generic_class_method_groups(const Gene
     const auto* first_class = class_group.instantiations.front();
     for (const auto& first_method : first_class->methods)
     {
-        if (!is_wrapper_visible_method(first_method))
+        if (!is_wrapper_visible_method(first_method, true))
         {
             continue;
         }
@@ -1925,7 +1364,7 @@ std::vector<GenericFunctionGroup> collect_generic_class_method_groups(const Gene
             const FunctionDecl* matched_method = nullptr;
             for (const auto& candidate : class_decl->methods)
             {
-                if (!is_wrapper_visible_method(candidate))
+                if (!is_wrapper_visible_method(candidate, true))
                 {
                     continue;
                 }
@@ -2717,7 +2156,7 @@ bool module_has_virtual_callbacks(const ModuleDecl& module_decl)
 {
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl, csharp_method_collection_options());
         const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
         if (!virtual_methods.empty())
         {
@@ -3273,7 +2712,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     const ClassDecl* base_class = primary_base_class(module_decl, class_decl);
     const bool has_base_class = base_class != nullptr;
     const bool emits_destroy = class_has_owned_ctor(class_decl);
-    const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+    const auto emitted_methods = collect_emitted_methods(module_decl, class_decl, csharp_method_collection_options());
     const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
     const bool has_virtual_support = !virtual_methods.empty();
     const bool is_primary_base_class = is_primary_base_for_any_class(module_decl, class_decl);
@@ -3658,7 +3097,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl, csharp_method_collection_options());
         const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
 
         FunctionDecl type_name_decl;
