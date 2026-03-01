@@ -45,6 +45,12 @@ void assign_ptr(T* value, T next)
     *value = next;
 }
 
+inline void write_pair(int& first, int& second)
+{
+    first = 11;
+    second = 22;
+}
+
 }   // namespace csbind23::testing::basic
 
 namespace csbind23::testing
@@ -95,7 +101,10 @@ inline void register_bindings_basic(BindingsGenerator& generator, std::string_vi
         .def<&basic::assign_ptr<uint64_t>>("assign_ptr_uint64")
         .def<&basic::assign_ptr<float>>("assign_ptr_float")
         .def<&basic::assign_ptr<double>>("assign_ptr_double")
-        .def<&basic::assign_ptr<char16_t>>("assign_ptr_char16");
+        .def<&basic::assign_ptr<char16_t>>("assign_ptr_char16")
+        .def<&basic::write_pair>("write_pair",
+            csbind23::Arg{0, "left", true},
+            csbind23::Arg{.idx = 1, .name = "right", .output = true});
 }
 
 } // namespace csbind23::testing

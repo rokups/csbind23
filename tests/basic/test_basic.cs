@@ -312,4 +312,25 @@ public class BasicTests
 		BasicApi.assign_ptr_char16(ref char16Value, 'Y');
 		Assert.Equal('Y', char16Value);
 	}
+
+	[Fact]
+	public void ArgOption_Output_UsesOutAndWritesValues()
+	{
+		BasicApi.write_pair(out var left, out var right);
+		Assert.Equal(11, left);
+		Assert.Equal(22, right);
+	}
+
+	[Fact]
+	public void ArgOption_Name_PropagatesToManagedSignature()
+	{
+		var method = typeof(BasicApi).GetMethod("write_pair");
+		Assert.NotNull(method);
+		var parameters = method!.GetParameters();
+		Assert.Equal(2, parameters.Length);
+		Assert.Equal("left", parameters[0].Name);
+		Assert.Equal("right", parameters[1].Name);
+		Assert.True(parameters[0].IsOut);
+		Assert.True(parameters[1].IsOut);
+	}
 }

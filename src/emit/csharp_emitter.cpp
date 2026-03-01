@@ -287,22 +287,39 @@ bool parameter_is_direct_ref(const ParameterDecl& parameter)
     return parameter_is_ref(parameter) && parameter.type.managed_to_pinvoke_expression.empty();
 }
 
+bool parameter_is_direct_out(const ParameterDecl& parameter)
+{
+    return parameter.is_output && parameter_is_direct_ref(parameter);
+}
+
+std::string parameter_direct_byref_keyword(const ParameterDecl& parameter)
+{
+    if (!parameter_is_direct_ref(parameter))
+    {
+        return {};
+    }
+
+    return parameter_is_direct_out(parameter) ? "out " : "ref ";
+}
+
+std::string parameter_signature_byref_keyword(const ParameterDecl& parameter)
+{
+    if (!parameter_is_ref(parameter))
+    {
+        return {};
+    }
+
+    return parameter_is_direct_out(parameter) ? "out " : "ref ";
+}
+
 std::string parameter_call_argument(const ParameterDecl& parameter)
 {
-    if (parameter_is_direct_ref(parameter))
-    {
-        return "ref " + parameter.name;
-    }
-    return parameter.name;
+    return parameter_direct_byref_keyword(parameter) + parameter.name;
 }
 
 std::string parameter_call_argument(const ParameterDecl& parameter, std::string_view argument_expression)
 {
-    if (parameter_is_direct_ref(parameter))
-    {
-        return "ref " + std::string(argument_expression);
-    }
-    return std::string(argument_expression);
+    return parameter_direct_byref_keyword(parameter) + std::string(argument_expression);
 }
 
 std::string reflection_parameter_type_expression(const ParameterDecl& parameter)
@@ -752,8 +769,8 @@ std::string parameter_list_without_self(const FunctionDecl& function_decl)
     for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
     {
         const auto& parameter = function_decl.parameters[index];
-        const bool is_ref = parameter_is_ref(parameter);
-        rendered += std::format("{}{} {}", is_ref ? "ref " : "", wrapper_type_name(parameter.type), parameter.name);
+        rendered += std::format("{}{} {}", parameter_signature_byref_keyword(parameter), wrapper_type_name(parameter.type),
+            parameter.name);
         if (index + 1 < function_decl.parameters.size())
         {
             rendered += ", ";
@@ -837,8 +854,7 @@ std::string free_function_parameter_list(const ModuleDecl& module_decl, const Fu
     for (std::size_t index = 0; index < function_decl.parameters.size(); ++index)
     {
         const auto& parameter = function_decl.parameters[index];
-        const bool is_ref = parameter_is_ref(parameter);
-        rendered += std::format("{}{} {}", is_ref ? "ref " : "",
+        rendered += std::format("{}{} {}", parameter_signature_byref_keyword(parameter),
             parameter_type_for_public_signature(module_decl, function_decl, parameter, index), parameter.name);
         if (index + 1 < function_decl.parameters.size())
         {
@@ -1031,7 +1047,7 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
         {
             output.append(", ");
         }
-        output.append_format("{}{} {}", parameter_is_direct_ref(parameter) ? "ref " : "", parameter.type.pinvoke_name,
+        output.append_format("{}{} {}", parameter_direct_byref_keyword(parameter), parameter.type.pinvoke_name,
             parameter.name);
         needs_separator = true;
     }
@@ -1379,8 +1395,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             callback_delegate_name(method_decl, index));
         for (const auto& parameter : method_decl.parameters)
         {
-            output.append_format(", {}{} {}", parameter_is_direct_ref(parameter) ? "ref " : "",
-                parameter.type.pinvoke_name, parameter.name);
+            output.append_format(", {}{} {}", parameter_direct_byref_keyword(parameter), parameter.type.pinvoke_name,
+                parameter.name);
         }
         output.append_line(");");
         output.append_line_format(
@@ -1433,8 +1449,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         output.append_format("    private static {} {}(System.IntPtr self", method_decl.return_type.pinvoke_name, method_name);
         for (const auto& parameter : method_decl.parameters)
         {
-            output.append_format(", {}{} {}", parameter_is_direct_ref(parameter) ? "ref " : "",
-                parameter.type.pinvoke_name, parameter.name);
+            output.append_format(", {}{} {}", parameter_direct_byref_keyword(parameter), parameter.type.pinvoke_name,
+                parameter.name);
         }
         output.append_line(")");
         output.append_line("    {");
@@ -1499,7 +1515,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             {
                 if (parameter_is_ref(parameter))
                 {
-                    managed_args.push_back("ref " + parameter.name);
+                    managed_args.push_back(parameter_signature_byref_keyword(parameter) + parameter.name);
                 }
                 else
                 {

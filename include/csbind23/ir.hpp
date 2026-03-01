@@ -41,6 +41,7 @@ struct ParameterDecl
 {
     std::string name;
     TypeRef type;
+    bool is_output = false;
 };
 
 struct FunctionDecl

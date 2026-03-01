@@ -47,6 +47,36 @@ struct Attribute
     std::string_view value;
 };
 
+struct Arg
+{
+    std::size_t idx = 0;
+    std::string_view name = {};
+    bool output = false;
+};
+
+namespace detail
+{
+
+inline void apply_arg_options(std::vector<ParameterDecl>& parameters, const std::vector<Arg>& arg_options)
+{
+    for (const auto& arg_option : arg_options)
+    {
+        if (arg_option.idx >= parameters.size())
+        {
+            continue;
+        }
+
+        auto& parameter = parameters[arg_option.idx];
+        if (!arg_option.name.empty())
+        {
+            parameter.name = std::string(arg_option.name);
+        }
+        parameter.is_output = arg_option.output;
+    }
+}
+
+} // namespace detail
+
 class BindingsGenerator
 {
 public:
@@ -177,7 +207,7 @@ public:
             ? std::string(detail::function_symbol_name<Function>())
             : std::string(def_options.cpp_symbol);
         return def_impl(name, Function, def_options.return_ownership, def_options.trailing_default_argument_count,
-            cpp_symbol, def_options.csharp_attributes);
+            cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
     }
 
     template <typename ReturnType, typename... Args, typename... Options>
@@ -185,13 +215,13 @@ public:
     {
         const auto def_options = make_function_def_options(std::forward<Options>(options)...);
         return def_impl(name, function_ptr, def_options.return_ownership, def_options.trailing_default_argument_count,
-            def_options.cpp_symbol, def_options.csharp_attributes);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
     }
 
     template <typename ReturnType, typename... Args>
     ModuleBuilder& def_impl(std::string_view name, ReturnType (*function_ptr)(Args...), Ownership return_ownership,
         std::size_t trailing_default_argument_count, std::string_view cpp_symbol,
-        std::vector<std::string> csharp_attributes = {})
+        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {})
     {
         (void)function_ptr;
 
@@ -209,6 +239,8 @@ public:
         ((function_decl.parameters.push_back(
              ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
             ...);
+
+        detail::apply_arg_options(function_decl.parameters, arg_options);
 
         module_decl_->functions.push_back(std::move(function_decl));
         return *this;
@@ -233,6 +265,7 @@ private:
         std::size_t trailing_default_argument_count = 0;
         std::string_view cpp_symbol = {};
         std::vector<std::string> csharp_attributes;
+        std::vector<Arg> arg_options;
     };
 
     struct ClassOptions
@@ -279,10 +312,15 @@ private:
         options.csharp_attributes.push_back(std::string(attribute.value));
     }
 
+    static void apply_function_def_option(FunctionDefOptions& options, Arg arg_option)
+    {
+        options.arg_options.push_back(arg_option);
+    }
+
     template <typename Option> static void apply_function_def_option(FunctionDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, Attribute.");
+            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, Attribute, Arg.");
     }
 
     template <typename... Options> static ClassOptions make_class_options(Options&&... options)
@@ -401,7 +439,7 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
         return *this;
     }
 
@@ -417,7 +455,7 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes);
+            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
         return *this;
     }
 
@@ -580,6 +618,7 @@ private:
         bool allow_override = false;
         std::string_view cpp_symbol = {};
         std::vector<std::string> csharp_attributes;
+        std::vector<Arg> arg_options;
     };
 
     template <typename Option> struct dependent_false : std::false_type
@@ -618,17 +657,22 @@ private:
         options.csharp_attributes.push_back(std::string(attribute.value));
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, Arg arg_option)
+    {
+        options.arg_options.push_back(arg_option);
+    }
+
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, Attribute.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, Attribute, Arg.");
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_method(std::string_view name, bool is_const, Ownership return_ownership,
         std::size_t trailing_default_argument_count = 0, bool allow_override = false,
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
-        std::vector<std::string> csharp_attributes = {})
+        std::vector<std::string> csharp_attributes = {}, std::vector<Arg> arg_options = {})
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
@@ -651,6 +695,8 @@ private:
         ((method_decl.parameters.push_back(
              ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
             ...);
+
+        detail::apply_arg_options(method_decl.parameters, arg_options);
 
         class_decl_->methods.push_back(std::move(method_decl));
     }
