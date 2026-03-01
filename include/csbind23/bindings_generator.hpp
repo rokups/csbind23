@@ -7,8 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <initializer_list>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -34,6 +36,22 @@ struct CppSymbol
     std::string_view value;
 };
 
+struct CppSymbols
+{
+    std::vector<std::string> values;
+
+    CppSymbols() = default;
+
+    CppSymbols(std::initializer_list<std::string_view> symbol_values)
+    {
+        values.reserve(symbol_values.size());
+        for (const auto symbol : symbol_values)
+        {
+            values.push_back(std::string(symbol));
+        }
+    }
+};
+
 struct CppName
 {
     std::string_view value;
@@ -57,6 +75,35 @@ struct Arg
 
 namespace detail
 {
+
+template <auto First, auto... Rest, typename Callback>
+void for_each_nontype_indexed(Callback&& callback)
+{
+    std::size_t index = 0;
+    callback.template operator()<First>(index++);
+    (callback.template operator()<Rest>(index++), ...);
+}
+
+inline std::string_view generic_cpp_symbol_for(const std::vector<std::string>& cpp_symbols, std::size_t index)
+{
+    if (index >= cpp_symbols.size())
+    {
+        return {};
+    }
+
+    return cpp_symbols[index];
+}
+
+inline std::string generic_instantiation_suffix(std::size_t index)
+{
+    return std::format("__csbind23_g{}", index);
+}
+
+inline void mark_generic_instantiation(FunctionDecl& function_decl, std::string_view group_name)
+{
+    function_decl.is_generic_instantiation = true;
+    function_decl.generic_group_name = std::string(group_name);
+}
 
 inline void apply_arg_options(std::vector<ParameterDecl>& parameters, const std::vector<Arg>& arg_options)
 {
@@ -228,8 +275,10 @@ public:
     ModuleBuilder& def_generic(std::string_view name, Options&&... options)
     {
         const auto def_options = make_function_def_options(std::forward<Options>(options)...);
-        add_generic_instantiation<FirstFunction>(name, def_options);
-        (add_generic_instantiation<RestFunctions>(name, def_options), ...);
+        detail::for_each_nontype_indexed<FirstFunction, RestFunctions...>([&]<auto Function>(std::size_t index) {
+            add_generic_instantiation<Function>(
+                name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index));
+        });
         return *this;
     }
 
@@ -279,14 +328,17 @@ private:
     struct FunctionDefOptions;
 
     template <auto Function>
-    ModuleBuilder& add_generic_instantiation(std::string_view name, const FunctionDefOptions& def_options)
+    ModuleBuilder& add_generic_instantiation(
+        std::string_view name, const FunctionDefOptions& def_options, std::string_view cpp_symbol_override = {})
     {
-        const std::string cpp_symbol = def_options.cpp_symbol.empty()
+        const std::string cpp_symbol = !cpp_symbol_override.empty()
+            ? std::string(cpp_symbol_override)
+            : (def_options.cpp_symbol.empty()
             ? std::string(detail::function_symbol_name<Function>())
-            : std::string(def_options.cpp_symbol);
+            : std::string(def_options.cpp_symbol));
 
         const std::string group_name(name);
-        const std::string unique_suffix = std::format("__csbind23_g{}", module_decl_->functions.size());
+        const std::string unique_suffix = detail::generic_instantiation_suffix(module_decl_->functions.size());
         const std::string managed_name = group_name + unique_suffix;
         const std::string export_name = group_name + unique_suffix;
 
@@ -295,8 +347,7 @@ private:
             def_options.arg_options, export_name);
 
         FunctionDecl& inserted = module_decl_->functions.back();
-        inserted.is_generic_instantiation = true;
-        inserted.generic_group_name = group_name;
+        detail::mark_generic_instantiation(inserted, group_name);
         return *this;
     }
 
@@ -305,6 +356,7 @@ private:
         Ownership return_ownership = Ownership::Auto;
         std::size_t trailing_default_argument_count = 0;
         std::string_view cpp_symbol = {};
+        std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
         std::vector<Arg> arg_options;
     };
@@ -348,6 +400,11 @@ private:
         options.cpp_symbol = cpp_symbol.value;
     }
 
+    static void apply_function_def_option(FunctionDefOptions& options, CppSymbols cpp_symbols)
+    {
+        options.cpp_symbols = std::move(cpp_symbols.values);
+    }
+
     static void apply_function_def_option(FunctionDefOptions& options, Attribute attribute)
     {
         options.csharp_attributes.push_back(std::string(attribute.value));
@@ -361,7 +418,7 @@ private:
     template <typename Option> static void apply_function_def_option(FunctionDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, Attribute, Arg.");
+            "Unsupported ModuleBuilder::def option. Supported tags: Ownership, WithDefaults, CppSymbol, CppSymbols, Attribute, Arg.");
     }
 
     template <typename... Options> static ClassOptions make_class_options(Options&&... options)
@@ -509,8 +566,10 @@ public:
     ClassBuilder& def_generic(std::string_view name, Options&&... options)
     {
         const auto def_options = make_method_def_options(std::forward<Options>(options)...);
-        add_generic_method_instantiation(name, FirstMethodPtr, def_options);
-        (add_generic_method_instantiation(name, RestMethodPtrs, def_options), ...);
+        detail::for_each_nontype_indexed<FirstMethodPtr, RestMethodPtrs...>([&]<auto MethodPtr>(std::size_t index) {
+            add_generic_method_instantiation_auto<MethodPtr>(
+                name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index));
+        });
         return *this;
     }
 
@@ -707,6 +766,7 @@ private:
         std::size_t trailing_default_argument_count = 0;
         bool allow_override = false;
         std::string_view cpp_symbol = {};
+        std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
         std::vector<Arg> arg_options;
     };
@@ -742,6 +802,11 @@ private:
         options.cpp_symbol = cpp_symbol.value;
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, CppSymbols cpp_symbols)
+    {
+        options.cpp_symbols = std::move(cpp_symbols.values);
+    }
+
     static void apply_method_def_option(MethodDefOptions& options, Attribute attribute)
     {
         options.csharp_attributes.push_back(std::string(attribute.value));
@@ -755,7 +820,7 @@ private:
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, Attribute, Arg.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, CppSymbol, CppSymbols, Attribute, Arg.");
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
@@ -794,9 +859,112 @@ private:
         class_decl_->methods.push_back(std::move(method_decl));
     }
 
+    template <auto MethodPtr>
+    void add_generic_method_instantiation_auto(
+        std::string_view name, const MethodDefOptions& def_options, std::string_view cpp_symbol_override = {})
+    {
+        const std::string cpp_symbol = !cpp_symbol_override.empty()
+            ? std::string(cpp_symbol_override)
+            : (def_options.cpp_symbol.empty()
+            ? infer_generic_method_cpp_symbol(std::string(detail::function_symbol_name<MethodPtr>()), MethodPtr)
+            : std::string(def_options.cpp_symbol));
+
+        add_generic_method_instantiation(name, MethodPtr, def_options, cpp_symbol);
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    static std::string infer_generic_method_cpp_symbol(
+        std::string base_symbol, ReturnType (ClassType::*)(Args...))
+    {
+        if (base_symbol.empty() || base_symbol.find('<') != std::string::npos)
+        {
+            return base_symbol;
+        }
+
+        std::vector<std::string> template_args;
+        if constexpr (sizeof...(Args) == 0)
+        {
+            template_args.push_back(detail::cpp_type_name<ReturnType>());
+        }
+        else
+        {
+            const std::string return_type_name = detail::cpp_type_name<ReturnType>();
+            const std::string first_arg_type_name = detail::cpp_type_name<std::tuple_element_t<0, std::tuple<Args...>>>();
+            if (return_type_name != first_arg_type_name)
+            {
+                template_args.push_back(return_type_name);
+            }
+
+            (template_args.push_back(detail::cpp_type_name<Args>()), ...);
+        }
+
+        if (template_args.empty())
+        {
+            return base_symbol;
+        }
+
+        std::string rendered = std::move(base_symbol);
+        rendered += "<";
+        for (std::size_t index = 0; index < template_args.size(); ++index)
+        {
+            rendered += template_args[index];
+            if (index + 1 < template_args.size())
+            {
+                rendered += ", ";
+            }
+        }
+        rendered += ">";
+        return rendered;
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    static std::string infer_generic_method_cpp_symbol(
+        std::string base_symbol, ReturnType (ClassType::*)(Args...) const)
+    {
+        if (base_symbol.empty() || base_symbol.find('<') != std::string::npos)
+        {
+            return base_symbol;
+        }
+
+        std::vector<std::string> template_args;
+        if constexpr (sizeof...(Args) == 0)
+        {
+            template_args.push_back(detail::cpp_type_name<ReturnType>());
+        }
+        else
+        {
+            const std::string return_type_name = detail::cpp_type_name<ReturnType>();
+            const std::string first_arg_type_name = detail::cpp_type_name<std::tuple_element_t<0, std::tuple<Args...>>>();
+            if (return_type_name != first_arg_type_name)
+            {
+                template_args.push_back(return_type_name);
+            }
+
+            (template_args.push_back(detail::cpp_type_name<Args>()), ...);
+        }
+
+        if (template_args.empty())
+        {
+            return base_symbol;
+        }
+
+        std::string rendered = std::move(base_symbol);
+        rendered += "<";
+        for (std::size_t index = 0; index < template_args.size(); ++index)
+        {
+            rendered += template_args[index];
+            if (index + 1 < template_args.size())
+            {
+                rendered += ", ";
+            }
+        }
+        rendered += ">";
+        return rendered;
+    }
+
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_generic_method_instantiation(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...),
-        const MethodDefOptions& def_options)
+        const MethodDefOptions& def_options, std::string_view cpp_symbol_override = {})
     {
         (void)method_ptr;
         if (def_options.allow_override)
@@ -805,22 +973,21 @@ private:
         }
 
         const std::string group_name(name);
-        const std::string unique_suffix = std::format("__csbind23_g{}", class_decl_->methods.size());
+        const std::string unique_suffix = detail::generic_instantiation_suffix(class_decl_->methods.size());
         const std::string managed_name = group_name + unique_suffix;
 
         add_method<ClassType, ReturnType, Args...>(managed_name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+            cpp_symbol_override, def_options.csharp_attributes, def_options.arg_options);
 
         FunctionDecl& inserted = class_decl_->methods.back();
-        inserted.is_generic_instantiation = true;
-        inserted.generic_group_name = group_name;
+        detail::mark_generic_instantiation(inserted, group_name);
         inserted.exported_name = inserted.name;
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_generic_method_instantiation(std::string_view name, ReturnType (ClassType::*method_ptr)(Args...) const,
-        const MethodDefOptions& def_options)
+        const MethodDefOptions& def_options, std::string_view cpp_symbol_override = {})
     {
         (void)method_ptr;
         if (def_options.allow_override)
@@ -829,16 +996,15 @@ private:
         }
 
         const std::string group_name(name);
-        const std::string unique_suffix = std::format("__csbind23_g{}", class_decl_->methods.size());
+        const std::string unique_suffix = detail::generic_instantiation_suffix(class_decl_->methods.size());
         const std::string managed_name = group_name + unique_suffix;
 
         add_method<ClassType, ReturnType, Args...>(managed_name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.arg_options);
+            cpp_symbol_override, def_options.csharp_attributes, def_options.arg_options);
 
         FunctionDecl& inserted = class_decl_->methods.back();
-        inserted.is_generic_instantiation = true;
-        inserted.generic_group_name = group_name;
+        detail::mark_generic_instantiation(inserted, group_name);
         inserted.exported_name = inserted.name;
     }
 
