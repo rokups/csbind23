@@ -68,8 +68,9 @@ ModuleBuilder::ModuleBuilder(BindingsGenerator& owner, ModuleDecl& module_decl)
 {
 }
 
-ClassBuilder::ClassBuilder(BindingsGenerator& owner, ClassDecl& class_decl)
+ClassBuilder::ClassBuilder(BindingsGenerator& owner, ModuleDecl& module_decl, ClassDecl& class_decl)
     : owner_(&owner)
+    , module_decl_(&module_decl)
     , class_decl_(&class_decl)
 {
 }

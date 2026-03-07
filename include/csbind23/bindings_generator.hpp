@@ -266,23 +266,23 @@ public:
     std::vector<std::filesystem::path> generate_cabi(const std::filesystem::path& output_root) const;
     std::vector<std::filesystem::path> generate_csharp(const std::filesystem::path& output_root) const;
 
-    template <typename Type> TypeRef make_bound_param_type_ref() const
+    template <typename Type> TypeRef make_bound_param_type_ref(const ModuleDecl* current_module = nullptr) const
     {
         TypeRef type_ref = detail::make_param_type_ref<Type>();
-        apply_managed_converter<Type>(type_ref);
+        apply_managed_converter<Type>(type_ref, current_module);
         return type_ref;
     }
 
-    template <typename Type> TypeRef make_bound_return_type_ref() const
+    template <typename Type> TypeRef make_bound_return_type_ref(const ModuleDecl* current_module = nullptr) const
     {
         TypeRef type_ref = detail::make_return_type_ref<Type>();
-        apply_managed_converter<Type>(type_ref);
+        apply_managed_converter<Type>(type_ref, current_module);
         return type_ref;
     }
 
-    template <typename Type> TypeRef make_bound_type_ref() const
+    template <typename Type> TypeRef make_bound_type_ref(const ModuleDecl* current_module = nullptr) const
     {
-        return make_bound_param_type_ref<Type>();
+        return make_bound_param_type_ref<Type>(current_module);
     }
 
 private:
@@ -344,6 +344,73 @@ private:
         return {};
     }
 
+    BoundClassMatch find_bound_class_in_module(const ModuleDecl& module_decl, std::string_view cpp_name) const
+    {
+        for (const auto& class_decl : module_decl.classes)
+        {
+            if (class_decl.cpp_name == cpp_name)
+            {
+                return BoundClassMatch{&module_decl, &class_decl};
+            }
+        }
+
+        return {};
+    }
+
+    template <typename Type>
+    void assign_bound_std_string_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
+    {
+        if (current_module == nullptr)
+        {
+            return;
+        }
+
+        using NoRef = std::remove_reference_t<Type>;
+        using Bare = std::remove_cv_t<NoRef>;
+        using Base = std::remove_cv_t<std::remove_pointer_t<Bare>>;
+        if constexpr (!std::is_same_v<Base, std::string>)
+        {
+            return;
+        }
+
+        const auto match = find_bound_class_in_module(*current_module, "std::string");
+        if (match.module_decl == nullptr || match.class_decl == nullptr)
+        {
+            return;
+        }
+
+        const std::string csharp_namespace = csharp_namespace_name_for(*match.module_decl, *match.class_decl);
+        const std::string managed_class = managed_class_name_for(*match.module_decl, *match.class_decl);
+        const std::string qualified_managed_class = "global::" + csharp_namespace + "." + managed_class;
+
+        type_ref.managed_type_name = qualified_managed_class;
+
+        if constexpr (std::is_same_v<Bare, std::string> && !std::is_pointer_v<NoRef> && !std::is_reference_v<Type>)
+        {
+            type_ref.managed_to_pinvoke_expression =
+                "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} is null ? string.Empty : {value}.ToString())";
+            type_ref.managed_from_pinvoke_expression =
+                qualified_managed_class + ".FromManaged(global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value}))";
+            type_ref.managed_finalize_to_pinvoke_statement =
+                "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+            type_ref.managed_finalize_from_pinvoke_statement =
+                "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+            return;
+        }
+
+        if constexpr ((std::is_reference_v<Type> || std::is_pointer_v<NoRef>) && std::is_same_v<Base, std::string>)
+        {
+            type_ref.managed_to_pinvoke_expression = "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
+
+            if constexpr (!std::is_const_v<std::remove_pointer_t<NoRef>> && !std::is_const_v<NoRef>)
+            {
+                type_ref.managed_finalize_to_pinvoke_statement = "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
+            }
+
+            type_ref.managed_from_pinvoke_expression = qualified_managed_class + ".FromBorrowedHandle({value})";
+        }
+    }
+
     template <typename Type> void assign_bound_class_managed_converter(TypeRef& type_ref) const
     {
         using NoRef = std::remove_reference_t<Type>;
@@ -368,7 +435,7 @@ private:
                 : ".Borrowed");
 
         type_ref.managed_type_name = qualified_managed_class;
-        type_ref.managed_to_pinvoke_expression = "({value} == null ? System.IntPtr.Zero : {value}._cPtr.Handle)";
+        type_ref.managed_to_pinvoke_expression = "({value} is null ? System.IntPtr.Zero : {value}._cPtr.Handle)";
         type_ref.managed_from_pinvoke_expression = std::format(
             "({})global::{}.{}Runtime.WrapPolymorphic_{}({{value}}, {})",
             qualified_managed_class,
@@ -378,8 +445,14 @@ private:
             ownership_literal);
     }
 
-    template <typename Type> void apply_managed_converter(TypeRef& type_ref) const
+    template <typename Type> void apply_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
     {
+        assign_bound_std_string_managed_converter<Type>(type_ref, current_module);
+        if (type_ref.has_managed_converter())
+        {
+            return;
+        }
+
         assign_managed_converter<Type>(type_ref);
         if (type_ref.has_managed_converter())
         {
@@ -450,6 +523,11 @@ public:
     {
         module_decl_->csharp_namespace = std::string(namespace_name);
         return *this;
+    }
+
+    std::string_view name() const
+    {
+        return module_decl_->name;
     }
 
     ModuleBuilder& csharp_name_formatter(std::function<std::string(CSharpNameKind, std::string_view)> formatter)
@@ -533,7 +611,7 @@ public:
         function_decl.name = std::string(name);
         function_decl.exported_name = exported_name.empty() ? std::string(name) : std::string(exported_name);
         function_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
-        function_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
+        function_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         function_decl.return_ownership = return_ownership;
         function_decl.trailing_default_argument_count =
             trailing_default_argument_count > sizeof...(Args) ? sizeof...(Args) : trailing_default_argument_count;
@@ -544,7 +622,7 @@ public:
         function_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((function_decl.parameters.push_back(
-             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
+             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>(module_decl_)})),
             ...);
 
         detail::apply_arg_options(function_decl.parameters, arg_options);
@@ -756,7 +834,7 @@ private:
 class ClassBuilder
 {
 public:
-    ClassBuilder(BindingsGenerator& owner, ClassDecl& class_decl);
+    ClassBuilder(BindingsGenerator& owner, ModuleDecl& module_decl, ClassDecl& class_decl);
 
     ClassBuilder& enable_virtual_overrides(bool enabled = true)
     {
@@ -839,7 +917,7 @@ public:
         FunctionDecl ctor_decl;
         ctor_decl.name = "__ctor";
         ctor_decl.cpp_symbol = class_decl_->cpp_name;
-        ctor_decl.return_type = owner_->make_bound_return_type_ref<void*>();
+        ctor_decl.return_type = owner_->make_bound_return_type_ref<void*>(module_decl_);
         ctor_decl.return_ownership = ownership;
         ctor_decl.is_constructor = true;
         ctor_decl.class_name = class_decl_->cpp_name;
@@ -847,7 +925,7 @@ public:
         ctor_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((ctor_decl.parameters.push_back(
-             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
+             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>(module_decl_)})),
             ...);
 
         class_decl_->methods.push_back(std::move(ctor_decl));
@@ -982,7 +1060,7 @@ public:
 
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_type_ref<BareFieldType>();
+        property_decl.type = owner_->make_bound_type_ref<BareFieldType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.is_field_projection = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
@@ -1017,7 +1095,7 @@ public:
         (void)getter_ptr;
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
@@ -1035,7 +1113,7 @@ public:
         (void)getter_ptr;
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
@@ -1052,7 +1130,7 @@ public:
         (void)getter_ptr;
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
@@ -1069,7 +1147,7 @@ public:
         (void)getter_ptr;
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
 
@@ -1110,7 +1188,7 @@ public:
 
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.has_setter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
@@ -1135,7 +1213,7 @@ public:
 
         PropertyDecl property_decl;
         property_decl.name = std::string(name);
-        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>();
+        property_decl.type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         property_decl.has_getter = true;
         property_decl.has_setter = true;
         property_decl.getter_name = std::string("__csbind23_propget_") + std::string(name);
@@ -1245,7 +1323,7 @@ private:
         method_decl.name = std::string(name);
         method_decl.exported_name = std::string(name);
         method_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
-        method_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>();
+        method_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         method_decl.return_ownership = return_ownership;
         method_decl.trailing_default_argument_count = trailing_default_argument_count;
         method_decl.is_method = true;
@@ -1266,7 +1344,7 @@ private:
         method_decl.parameters.reserve(sizeof...(Args));
         std::size_t index = 0;
         ((method_decl.parameters.push_back(
-             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>()})),
+             ParameterDecl{"arg" + std::to_string(index++), owner_->make_bound_param_type_ref<Args>(module_decl_)})),
             ...);
 
         detail::apply_arg_options(method_decl.parameters, arg_options);
@@ -1443,6 +1521,7 @@ private:
     }
 
     BindingsGenerator* owner_;
+    ModuleDecl* module_decl_;
     ClassDecl* class_decl_;
 };
 
@@ -1463,7 +1542,7 @@ public:
     {
         for (const auto class_index : class_indices_)
         {
-            ClassBuilder(*owner_, module_decl_->classes[class_index]).template ctor<Args...>(ownership);
+            ClassBuilder(*owner_, *module_decl_, module_decl_->classes[class_index]).template ctor<Args...>(ownership);
         }
         return *this;
     }
@@ -1540,10 +1619,32 @@ public:
 
         auto options_tuple = std::make_tuple(std::forward<Options>(options)...);
         detail::for_each_nontype_indexed<FirstMethodPtr, RestMethodPtrs...>([&]<auto MethodPtr>(std::size_t index) {
-            ClassBuilder class_builder(*owner_, module_decl_->classes[class_indices_[index]]);
+            ClassBuilder class_builder(*owner_, *module_decl_, module_decl_->classes[class_indices_[index]]);
             std::apply(
                 [&]<typename... OptionTypes>(const OptionTypes&... unpacked_options) {
-                    class_builder.template def<MethodPtr>(name, unpacked_options...);
+                    std::string selected_cpp_symbol;
+                    ([&] {
+                        using OptionType = std::decay_t<OptionTypes>;
+                        if constexpr (std::is_same_v<OptionType, CppSymbols>)
+                        {
+                            const std::string_view symbol = detail::generic_cpp_symbol_for(unpacked_options.values, index);
+                            if (!symbol.empty())
+                            {
+                                selected_cpp_symbol = std::string(symbol);
+                            }
+                        }
+                    }(),
+                        ...);
+
+                    if (selected_cpp_symbol.empty())
+                    {
+                        class_builder.template def<MethodPtr>(name, unpacked_options...);
+                    }
+                    else
+                    {
+                        class_builder.template def<MethodPtr>(
+                            name, CppSymbol{selected_cpp_symbol}, unpacked_options...);
+                    }
                 },
                 options_tuple);
         });
@@ -1580,7 +1681,7 @@ private:
     {
         using ClassType = std::tuple_element_t<Index, std::tuple<ClassTypes...>>;
         constexpr auto method_ptr = MethodResolver.template operator()<ClassType>();
-        ClassBuilder class_builder(*owner_, module_decl_->classes[class_indices_[Index]]);
+        ClassBuilder class_builder(*owner_, *module_decl_, module_decl_->classes[class_indices_[Index]]);
         std::apply(
             [&]<typename... OptionTypes>(const OptionTypes&... unpacked_options) {
                 class_builder.template def<method_ptr>(name, unpacked_options...);
@@ -1651,7 +1752,7 @@ ClassBuilder ModuleBuilder::class_(std::string_view name, Options&&... options)
         class_decl.base_cpp_name = class_decl.base_classes.front().cpp_name;
     }
     module_decl_->classes.push_back(std::move(class_decl));
-    return ClassBuilder(*owner_, module_decl_->classes.back());
+    return ClassBuilder(*owner_, *module_decl_, module_decl_->classes.back());
 }
 
 template <typename FirstClass, typename... RestClasses>
@@ -1724,7 +1825,7 @@ EnumBuilder ModuleBuilder::enum_(std::string_view name, Options&&... options)
     enum_decl.name = std::string(name);
     enum_decl.cpp_name = enum_options.cpp_name.empty() ? detail::qualified_type_name<EnumType>()
                                                         : std::string(enum_options.cpp_name);
-    enum_decl.underlying_type = owner_->make_bound_type_ref<Underlying>();
+    enum_decl.underlying_type = owner_->make_bound_type_ref<Underlying>(module_decl_);
     enum_decl.is_flags = enum_options.is_flags;
     enum_decl.csharp_attributes = enum_options.csharp_attributes;
     module_decl_->enums.push_back(std::move(enum_decl));

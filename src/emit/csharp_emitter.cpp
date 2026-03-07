@@ -395,13 +395,7 @@ std::string public_parameter_type_name(const ParameterDecl& parameter)
 void emit_shared_pinvoke_types_if_needed(
     const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
 {
-    if (!module_uses_pinvoke_type(module_decl, "CsBind23StringView"))
-    {
-        return;
-    }
-
-    const auto shared_path = output_root / "csbind23.types.g.cs";
-    if (std::filesystem::exists(shared_path))
+    if (!module_uses_pinvoke_type(module_decl, "CsBind23StringView") && !module_uses_managed_type(module_decl, "string"))
     {
         return;
     }
@@ -409,6 +403,54 @@ void emit_shared_pinvoke_types_if_needed(
     TextWriter shared(256);
     shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
+    shared.append_line("public static class CsBind23Utf8Interop");
+    shared.append_line("{");
+    shared.append_line("    public static System.IntPtr StringToNative(string value)");
+    shared.append_line("    {");
+    shared.append_line("        string text = value ?? string.Empty;");
+    shared.append_line("        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);");
+    shared.append_line("        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes.Length + 1);");
+    shared.append_line("        if (bytes.Length != 0)");
+    shared.append_line("        {");
+    shared.append_line("            System.Runtime.InteropServices.Marshal.Copy(bytes, 0, ptr, bytes.Length);");
+    shared.append_line("        }");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.WriteByte(ptr, bytes.Length, 0);");
+    shared.append_line("        return ptr;");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static string NativeToString(System.IntPtr ptr)");
+    shared.append_line("    {");
+    shared.append_line("        if (ptr == System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            return string.Empty;");
+    shared.append_line("        }");
+    shared.append_line();
+    shared.append_line("        int length = 0;");
+    shared.append_line("        while (System.Runtime.InteropServices.Marshal.ReadByte(ptr, length) != 0)");
+    shared.append_line("        {");
+    shared.append_line("            length++; ");
+    shared.append_line("        }");
+    shared.append_line();
+    shared.append_line("        if (length == 0)");
+    shared.append_line("        {");
+    shared.append_line("            return string.Empty;");
+    shared.append_line("        }");
+    shared.append_line();
+    shared.append_line("        byte[] bytes = new byte[length];");
+    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(ptr, bytes, 0, length);");
+    shared.append_line("        return System.Text.Encoding.UTF8.GetString(bytes);");
+    shared.append_line("    }");
+    shared.append_line();
+    shared.append_line("    public static void Free(System.IntPtr ptr)");
+    shared.append_line("    {");
+    shared.append_line("        if (ptr != System.IntPtr.Zero)");
+    shared.append_line("        {");
+    shared.append_line("            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);");
+    shared.append_line("        }");
+    shared.append_line("    }");
+    shared.append_line("}");
+    shared.append_line();
+
     shared.append_line("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]");
     shared.append_line("public readonly struct CsBind23StringView");
     shared.append_line("{");
@@ -676,6 +718,12 @@ std::string wrapper_type_name(const TypeRef& type_ref)
 bool parameter_is_ref(const ParameterDecl& parameter)
 {
     if (parameter.is_c_array)
+    {
+        return false;
+    }
+
+    if (is_cpp_std_string(parameter.type.cpp_name) && parameter.type.has_managed_converter()
+        && parameter.type.managed_type_name != "string")
     {
         return false;
     }
@@ -1024,6 +1072,11 @@ std::string managed_name(const ModuleDecl& module_decl, CSharpNameKind kind, std
 std::string managed_class_name(const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
     return managed_name(module_decl, CSharpNameKind::Class, class_decl.name);
+}
+
+std::string qualified_managed_class_name(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    return "global::" + csharp_namespace_name(module_decl, class_decl) + "." + managed_class_name(module_decl, class_decl);
 }
 
 std::string managed_function_name(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
@@ -3949,7 +4002,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         else
         {
             generated.append_line_format(
-                "            (handle, ownership) => new {}(handle, ownership),", managed_class_name(module_decl, class_decl));
+                "            (handle, ownership) => new {}(handle, ownership),", qualified_managed_class_name(module_decl, class_decl));
         }
     }
     generated.append_line("        };");
@@ -3982,7 +4035,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         else
         {
-            generated.append_line_format("        return new {}(handle, ownership);", managed_class_name(module_decl, class_decl));
+            generated.append_line_format("        return new {}(handle, ownership);", qualified_managed_class_name(module_decl, class_decl));
         }
         generated.append_line("    }");
         generated.append_line();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "csbind23/bindings_generator.hpp"
+#include "csbind23/std.hpp"
 
 #include <string>
 #include <string_view>
@@ -103,6 +104,8 @@ namespace csbind23::testing
 inline void register_bindings_string(BindingsGenerator& generator, std::string_view module_name)
 {
     auto module = generator.module(module_name);
+    csbind23::add_string(module);
+
     module.pinvoke_library("e2e.C")
         .cabi_include("\"tests/stl/test_string.hpp\"")
         .def<&strings::echo_by_value>("string_echo_by_value")

@@ -380,7 +380,24 @@ template <> struct Converter<std::string>
     using c_abi_type = const char*;
 
     static constexpr std::string_view c_abi_type_name() { return "const char*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "string"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return "string"; }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} ?? string.Empty)";
+    }
+    static constexpr std::string_view managed_from_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value})";
+    }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+    }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+    }
 
     static c_abi_type to_c_abi(const cpp_type& value)
     {
@@ -406,15 +423,15 @@ template <> struct Converter<const char*>
     static constexpr std::string_view managed_type_name() { return "string"; }
     static constexpr std::string_view managed_to_pinvoke_expression()
     {
-        return "System.Runtime.InteropServices.Marshal.StringToHGlobalAnsi({value} ?? string.Empty)";
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} ?? string.Empty)";
     }
     static constexpr std::string_view managed_from_pinvoke_expression()
     {
-        return "System.Runtime.InteropServices.Marshal.PtrToStringAnsi({value}) ?? string.Empty";
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value})";
     }
     static constexpr std::string_view managed_finalize_to_pinvoke_statement()
     {
-        return "System.Runtime.InteropServices.Marshal.FreeHGlobal({pinvoke})";
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
     }
 
     static c_abi_type to_c_abi(cpp_type value) { return value; }
@@ -430,12 +447,20 @@ template <> struct Converter<std::string_view>
     static constexpr std::string_view c_abi_param_type_name() { return "const char*"; }
     static constexpr std::string_view c_abi_return_type_name() { return "csbind23::cabi::StringView"; }
     static constexpr std::string_view pinvoke_type_name() { return "CsBind23StringView"; }
-    static constexpr std::string_view pinvoke_param_type_name() { return "string"; }
+    static constexpr std::string_view pinvoke_param_type_name() { return "System.IntPtr"; }
     static constexpr std::string_view pinvoke_return_type_name() { return "CsBind23StringView"; }
     static constexpr std::string_view managed_type_name() { return "string"; }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} ?? string.Empty)";
+    }
     static constexpr std::string_view managed_from_pinvoke_expression()
     {
         return "global::CsBind23.Generated.CsBind23StringViewExtensions.ToManaged({value})";
+    }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
     }
 
     static c_abi_type to_c_abi(const cpp_type& value)

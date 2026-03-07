@@ -69,9 +69,14 @@ std::vector<std::string> split_trimmed_lines(std::string_view text)
 void append_embedded_statement(TextWriter& output, std::string_view indent, std::string_view statement)
 {
     const auto lines = split_trimmed_lines(statement);
-    for (const auto& line : lines)
+    for (std::size_t index = 0; index < lines.size(); ++index)
     {
-        if (!line.empty() && line.back() == ';')
+        const auto& line = lines[index];
+        const bool opens_block_on_next_line = index + 1 < lines.size() && lines[index + 1] == "{";
+        const bool keeps_own_terminator = !line.empty()
+            && (line.back() == ';' || line.back() == '{' || line.back() == '}' || line.back() == ':');
+
+        if (keeps_own_terminator || opens_block_on_next_line)
         {
             output.append_line_format("{}{}", indent, line);
         }
