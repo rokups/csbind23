@@ -415,6 +415,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
     generated.append_line("#include <csbind23/cabi/converter.hpp>");
     generated.append_line("#include <cstddef>");
+    generated.append_line("#include <type_traits>");
     generated.append_line("#include <typeinfo>");
     for (const auto& include_directive : module_decl.cabi_includes)
     {
@@ -422,6 +423,26 @@ std::vector<std::filesystem::path> emit_cabi_module(
     }
     generated.append_line();
     generated.append_line_format("namespace generated::{} {{", module_decl.name);
+    generated.append_line();
+    generated.append_line("template <typename Target, typename Source>");
+    generated.append_line("Target* __csbind23_cast_handle(Source* self)");
+    generated.append_line("{");
+    generated.append_line("    if (self == nullptr)");
+    generated.append_line("    {");
+    generated.append_line("        return nullptr;");
+    generated.append_line("    }");
+    generated.append_line();
+    generated.append_line("    if constexpr (std::is_same_v<Target, Source>)");
+    generated.append_line("    {");
+    generated.append_line("        return self;");
+    generated.append_line("    }");
+    generated.append_line("    else if constexpr (std::is_polymorphic_v<Source>)");
+    generated.append_line("    {");
+    generated.append_line("        return dynamic_cast<Target*>(self);");
+    generated.append_line("    }");
+    generated.append_line();
+    generated.append_line("    return nullptr;");
+    generated.append_line("}");
     generated.append_line();
 
     for (const auto& function_decl : module_decl.functions)
@@ -491,6 +512,34 @@ std::vector<std::filesystem::path> emit_cabi_module(
             generated.append_line("    }");
         }
         generated.append_line_format("    return {};", class_type_id);
+        generated.append_line("}");
+        generated.append_line();
+
+        generated.append_line_format(
+            "extern \"C\" void* {}_{}_cast(void* self, int target_type_id) {{",
+            module_decl.name,
+            class_decl.name);
+        generated.append_line_format(
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+            class_decl.cpp_name);
+        generated.append_line("    if (__csbind23_self_cpp == nullptr)");
+        generated.append_line("    {");
+        generated.append_line("        return nullptr;");
+        generated.append_line("    }");
+        generated.append_line();
+        generated.append_line("    switch (target_type_id)");
+        generated.append_line("    {");
+        for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
+        {
+            generated.append_line_format("    case {}:", i);
+            generated.append_line_format(
+                "        return csbind23::cabi::Converter<{}*>::to_c_abi(__csbind23_cast_handle<{}>(__csbind23_self_cpp));",
+                module_decl.classes[i].cpp_name,
+                module_decl.classes[i].cpp_name);
+        }
+        generated.append_line("    default:");
+        generated.append_line("        return self;");
+        generated.append_line("    }");
         generated.append_line("}");
         generated.append_line();
 

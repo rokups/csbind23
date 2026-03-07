@@ -3921,6 +3921,17 @@ std::vector<std::filesystem::path> emit_csharp_module(
         append_native_signature(generated, dynamic_type_name_decl, module_decl.pinvoke_library,
             module_decl.name + "_" + class_decl.name + "_dynamic_type_id", true);
 
+        FunctionDecl cast_decl;
+        cast_decl.return_type.c_abi_name = "void*";
+        cast_decl.return_type.pinvoke_name = "System.IntPtr";
+        ParameterDecl cast_target_type_id;
+        cast_target_type_id.name = "target_type_id";
+        cast_target_type_id.type.c_abi_name = "int";
+        cast_target_type_id.type.pinvoke_name = "int";
+        cast_decl.parameters.push_back(std::move(cast_target_type_id));
+        append_native_signature(generated, cast_decl, module_decl.pinvoke_library,
+            module_decl.name + "_" + class_decl.name + "_cast", true);
+
         if (class_has_owned_ctor(class_decl))
         {
             FunctionDecl destroy_decl;
@@ -4026,7 +4037,15 @@ std::vector<std::filesystem::path> emit_csharp_module(
             class_decl.name);
         generated.append_line("        if (dynamicTypeId >= 0 && dynamicTypeId < __csbind23_typeFactories.Length)");
         generated.append_line("        {");
-        generated.append_line("            return __csbind23_typeFactories[dynamicTypeId](handle, ownership);");
+        generated.append_line_format(
+            "            System.IntPtr adjustedHandle = {}Native.{}_{}_cast(handle, dynamicTypeId);",
+            module_decl.name,
+            module_decl.name,
+            class_decl.name);
+        generated.append_line("            if (adjustedHandle != System.IntPtr.Zero)");
+        generated.append_line("            {");
+        generated.append_line("                return __csbind23_typeFactories[dynamicTypeId](adjustedHandle, ownership);");
+        generated.append_line("            }");
         generated.append_line("        }");
         generated.append_line();
         if (class_decl.is_generic_instantiation)

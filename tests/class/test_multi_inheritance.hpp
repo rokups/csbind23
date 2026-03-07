@@ -60,6 +60,8 @@ public:
 class TertiaryBase
 {
 public:
+    virtual ~TertiaryBase() = default;
+
     int tertiary_subtract(int value) const
     {
         return value - 3;
@@ -86,6 +88,18 @@ public:
     }
 };
 
+inline SecondaryBase* get_multi_derived_as_secondary_base()
+{
+    static MultiDerived value(10);
+    return static_cast<SecondaryBase*>(&value);
+}
+
+inline TertiaryBase* get_multi_derived_as_tertiary_base()
+{
+    static MultiDerived value(10);
+    return static_cast<TertiaryBase*>(&value);
+}
+
 } // namespace csbind23::testing::multi_inheritance
 
 namespace csbind23::testing
@@ -96,7 +110,9 @@ inline void register_bindings_multi_inheritance(BindingsGenerator& generator, st
     auto module = generator.module(module_name);
     module.csharp_api_class("MultiInheritanceApi")
         .pinvoke_library("e2e.C")
-        .cabi_include("\"tests/class/test_multi_inheritance.hpp\"");
+        .cabi_include("\"tests/class/test_multi_inheritance.hpp\"")
+        .def<&multi_inheritance::get_multi_derived_as_secondary_base>()
+        .def<&multi_inheritance::get_multi_derived_as_tertiary_base>();
 
     module.class_<multi_inheritance::PrimaryBase>()
         .ctor<int>()

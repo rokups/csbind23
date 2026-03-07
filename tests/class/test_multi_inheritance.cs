@@ -53,4 +53,26 @@ public class MultiInheritanceTests
         Assert.Equal(106, value.secondary_virtual_through_native(5));
         Assert.Equal(106, value.call_secondary_virtual_from_cpp(5));
     }
+
+    [Fact]
+    public void SecondaryBasePointer_ReturnedFromNative_WrapsAsMultiDerived()
+    {
+        using var value = Assert.IsType<MultiDerived>(MultiInheritanceApi.get_multi_derived_as_secondary_base());
+
+        Assert.Equal(8, value.secondary_scale(4));
+        Assert.Equal(27, value.secondary_bias_add(10));
+        Assert.Equal(7, value.tertiary_subtract(10));
+        Assert.Equal(6, value.call_secondary_virtual_from_cpp(5));
+    }
+
+    [Fact]
+    public void TertiaryBasePointer_ReturnedFromNative_WrapsAsMultiDerived()
+    {
+        using var value = Assert.IsType<MultiDerived>(MultiInheritanceApi.get_multi_derived_as_tertiary_base());
+
+        Assert.Equal(7, value.tertiary_subtract(10));
+        Assert.Equal(8, value.secondary_scale(4));
+        Assert.Equal(27, value.secondary_bias_add(10));
+        Assert.Equal(6, value.call_secondary_virtual_from_cpp(5));
+    }
 }
