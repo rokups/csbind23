@@ -80,7 +80,7 @@ template <typename ElementType> std::string vector_managed_borrowed_expression()
 
 template <typename ElementType> std::string vector_managed_borrow_expression()
 {
-    return "({value}?._handle ?? System.IntPtr.Zero)";
+    return "({value}?._cPtr ?? System.IntPtr.Zero)";
 }
 
 template <typename ElementType> std::string vector_managed_destroy_expression()

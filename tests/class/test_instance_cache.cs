@@ -88,7 +88,7 @@ public sealed class ManagedNativeHandleBackedCounter : NativeHandleBackedCounter
     {
     }
 
-    public System.IntPtr RawHandle => _handle;
+    public System.IntPtr RawHandle => _cPtr;
 
     public override int add(int arg0)
     {
