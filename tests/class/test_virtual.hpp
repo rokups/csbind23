@@ -1,7 +1,9 @@
 #pragma once
 
+#include "csbind23/std/string.hpp"
 #include "csbind23/bindings_generator.hpp"
 
+#include <string>
 #include <string_view>
 
 namespace csbind23::testing::virtual_dispatch

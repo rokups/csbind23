@@ -1,5 +1,5 @@
 using CsBind23.Generated;
-using StdString = CsBind23.Generated.string_module.Std.String;
+using StdString = CsBind23.Generated.Std.String;
 using Xunit;
 
 namespace CsBind23.Tests.E2E

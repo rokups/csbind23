@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -759,6 +761,152 @@ inline std::string make_string_wrapper_csharp_code(std::string_view wrapper_name
 
 } // namespace csbind23::detail
 
+namespace csbind23::cabi::detail
+{
+
+inline constexpr std::string_view std_string_wrapper_managed_type_name()
+{
+    return "global::CsBind23.Generated.Std.String";
+}
+
+} // namespace csbind23::cabi::detail
+
+namespace csbind23::cabi
+{
+
+template <> struct Converter<std::string>
+{
+    using cpp_type = std::string;
+    using c_abi_type = const char*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const char*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative(({value} is null ? string.Empty : {value}.ToString()))";
+    }
+    static constexpr std::string_view managed_from_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.Std.String.FromManaged(global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value}))";
+    }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+    }
+    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
+    {
+        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+    }
+
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        auto* buffer = static_cast<char*>(std::malloc(value.size() + 1));
+        if (buffer == nullptr)
+        {
+            return nullptr;
+        }
+        std::memcpy(buffer, value.c_str(), value.size() + 1);
+        return buffer;
+    }
+
+    static cpp_type from_c_abi(c_abi_type value) { return value == nullptr ? std::string{} : std::string{value}; }
+};
+
+template <> struct Converter<std::string&>
+{
+    using cpp_type = std::string&;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
+    }
+    static constexpr std::string_view managed_from_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
+    }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<std::string*>(value); }
+};
+
+template <> struct Converter<const std::string&>
+{
+    using cpp_type = const std::string&;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
+    }
+    static constexpr std::string_view managed_from_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<const std::string*>(value); }
+};
+
+template <> struct Converter<std::string*>
+{
+    using cpp_type = std::string*;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
+    }
+    static constexpr std::string_view managed_from_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
+    }
+    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
+    {
+        return "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+template <> struct Converter<const std::string*>
+{
+    using cpp_type = const std::string*;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
+    static constexpr std::string_view managed_to_pinvoke_expression()
+    {
+        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
+    }
+    static constexpr std::string_view managed_from_pinvoke_expression()
+    {
+        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
+    }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+} // namespace csbind23::cabi
+
 namespace csbind23
 {
 
@@ -767,7 +915,7 @@ inline ClassBuilder add_string(ModuleBuilder& module)
     module.cabi_include("<csbind23/std.hpp>");
 
     auto builder = module.class_<std::string>("String", CppName{"std::string"});
-    builder.csharp_namespace(detail::make_safe_csharp_namespace_segment(module.name()) + ".Std");
+    builder.csharp_namespace("Std");
     builder.csharp_interface("System.Collections.Generic.IEnumerable<char>");
     builder.csharp_interface("System.Collections.IEnumerable");
     builder.ctor<>();

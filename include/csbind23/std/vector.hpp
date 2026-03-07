@@ -2,6 +2,7 @@
 
 #include "csbind23/bindings_generator.hpp"
 #include "csbind23/std/detail.hpp"
+#include "csbind23/std/string.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -83,40 +84,6 @@ bool csbind23_vector_remove_first(std::vector<T>& value, T item)
 
 namespace csbind23::detail
 {
-template <typename Type>
-std::string fully_qualified_cpp_type_name()
-{
-    using NoRef = std::remove_reference_t<Type>;
-    using Base = std::remove_cv_t<std::remove_pointer_t<NoRef>>;
-
-    std::string full_name;
-    if constexpr (std::is_pointer_v<NoRef>)
-    {
-        if constexpr (std::is_const_v<std::remove_pointer_t<NoRef>>)
-        {
-            full_name += "const ";
-        }
-    }
-    else if constexpr (std::is_const_v<NoRef>)
-    {
-        full_name += "const ";
-    }
-
-    full_name += detail::qualified_type_name<Base>();
-
-    if constexpr (std::is_pointer_v<NoRef>)
-    {
-        full_name += "*";
-    }
-
-    if constexpr (std::is_reference_v<Type>)
-    {
-        full_name += "&";
-    }
-
-    return full_name;
-}
-
 template <typename... Types>
 CppSymbols make_vector_helper_cpp_symbols(std::string_view helper_name)
 {
@@ -276,6 +243,173 @@ inline std::string make_vector_wrapper_csharp_code(std::string_view wrapper_name
 }
 
 } // namespace csbind23::detail
+
+namespace csbind23::cabi::detail
+{
+
+template <typename ElementType> using vector_bare_element_type_t = std::remove_cv_t<std::remove_reference_t<ElementType>>;
+
+template <typename ElementType> std::string vector_element_managed_type_name()
+{
+    using BareElementType = vector_bare_element_type_t<ElementType>;
+
+    if constexpr (std::is_same_v<BareElementType, std::string>)
+    {
+        return std::string(std_string_wrapper_managed_type_name());
+    }
+
+    if constexpr (requires { Converter<BareElementType>::managed_type_name(); })
+    {
+        const std::string managed_name = std::string(Converter<BareElementType>::managed_type_name());
+        if (!managed_name.empty())
+        {
+            return managed_name;
+        }
+    }
+
+    return std::string(Converter<BareElementType>::pinvoke_type_name());
+}
+
+template <typename ElementType> std::string vector_managed_type_name()
+{
+    return "global::CsBind23.Generated.Std.Vector<" + vector_element_managed_type_name<ElementType>() + ">";
+}
+
+template <typename ElementType> std::string vector_item_ownership_expression()
+{
+    using BareElementType = vector_bare_element_type_t<ElementType>;
+    if constexpr (std::is_pointer_v<BareElementType>)
+    {
+        return "ItemOwnership.Borrowed";
+    }
+
+    return "ItemOwnership.Owned";
+}
+
+template <typename ElementType> std::string vector_managed_clone_expression()
+{
+    return vector_managed_type_name<ElementType>() + ".CloneOrCreateOwned({value})";
+}
+
+template <typename ElementType> std::string vector_managed_owned_expression()
+{
+    return vector_managed_type_name<ElementType>() + ".FromOwnedHandle({value}, "
+        + vector_item_ownership_expression<ElementType>() + ")";
+}
+
+template <typename ElementType> std::string vector_managed_borrowed_expression()
+{
+    return vector_managed_type_name<ElementType>() + ".FromBorrowedHandle({value}, "
+        + vector_item_ownership_expression<ElementType>() + ")";
+}
+
+template <typename ElementType> std::string vector_managed_borrow_expression()
+{
+    return "({value} == null ? System.IntPtr.Zero : {value}._cPtr.Handle)";
+}
+
+template <typename ElementType> std::string vector_managed_destroy_expression()
+{
+    return vector_managed_type_name<ElementType>()
+        + ".DestroyOwnedHandle({pinvoke}, ({managed}?._itemOwnership ?? ItemOwnership.Owned))";
+}
+
+} // namespace csbind23::cabi::detail
+
+namespace csbind23::cabi
+{
+
+template <typename ElementType> struct Converter<std::vector<ElementType>>
+{
+    using cpp_type = std::vector<ElementType>;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_clone_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_owned_expression<ElementType>(); }
+    static std::string managed_finalize_to_pinvoke_statement()
+    {
+        return detail::vector_managed_destroy_expression<ElementType>();
+    }
+
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        return static_cast<c_abi_type>(new cpp_type(value));
+    }
+
+    static cpp_type from_c_abi(c_abi_type value)
+    {
+        if (value == nullptr)
+        {
+            return {};
+        }
+        return *static_cast<const cpp_type*>(value);
+    }
+};
+
+template <typename ElementType> struct Converter<std::vector<ElementType>&>
+{
+    using cpp_type = std::vector<ElementType>&;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<std::vector<ElementType>*>(value); }
+};
+
+template <typename ElementType> struct Converter<const std::vector<ElementType>&>
+{
+    using cpp_type = const std::vector<ElementType>&;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<const std::vector<ElementType>*>(value); }
+};
+
+template <typename ElementType> struct Converter<std::vector<ElementType>*>
+{
+    using cpp_type = std::vector<ElementType>*;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+template <typename ElementType> struct Converter<const std::vector<ElementType>*>
+{
+    using cpp_type = const std::vector<ElementType>*;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+} // namespace csbind23::cabi
 
 namespace csbind23
 {
