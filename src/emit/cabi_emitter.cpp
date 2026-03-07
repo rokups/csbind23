@@ -413,37 +413,39 @@ std::vector<std::filesystem::path> emit_cabi_module(
     const auto source_path = output_root / (module_decl.name + "_cabi.cpp");
     TextWriter generated(4096);
 
-    generated.append_line("#include <csbind23/cabi/converter.hpp>");
-    generated.append_line("#include <cstddef>");
-    generated.append_line("#include <type_traits>");
-    generated.append_line("#include <typeinfo>");
+    generated.append(R"cpp(
+        #include <csbind23/cabi/converter.hpp>
+        #include <cstddef>
+        #include <type_traits>
+        #include <typeinfo>
+    )cpp");
     for (const auto& include_directive : module_decl.cabi_includes)
     {
         generated.append_line_format("#include {}", include_directive);
     }
     generated.append_line();
     generated.append_line_format("namespace generated::{} {{", module_decl.name);
-    generated.append_line();
-    generated.append_line("template <typename Target, typename Source>");
-    generated.append_line("Target* __csbind23_cast_handle(Source* self)");
-    generated.append_line("{");
-    generated.append_line("    if (self == nullptr)");
-    generated.append_line("    {");
-    generated.append_line("        return nullptr;");
-    generated.append_line("    }");
-    generated.append_line();
-    generated.append_line("    if constexpr (std::is_same_v<Target, Source>)");
-    generated.append_line("    {");
-    generated.append_line("        return self;");
-    generated.append_line("    }");
-    generated.append_line("    else if constexpr (std::is_polymorphic_v<Source>)");
-    generated.append_line("    {");
-    generated.append_line("        return dynamic_cast<Target*>(self);");
-    generated.append_line("    }");
-    generated.append_line();
-    generated.append_line("    return nullptr;");
-    generated.append_line("}");
-    generated.append_line();
+    generated.append(R"cpp(
+        template <typename Target, typename Source>
+        Target* __csbind23_cast_handle(Source* self)
+        {
+            if (self == nullptr)
+            {
+                return nullptr;
+            }
+
+            if constexpr (std::is_same_v<Target, Source>)
+            {
+                return self;
+            }
+            else if constexpr (std::is_polymorphic_v<Source>)
+            {
+                return dynamic_cast<Target*>(self);
+            }
+
+            return nullptr;
+        }
+    )cpp");
 
     for (const auto& function_decl : module_decl.functions)
     {
@@ -499,11 +501,13 @@ std::vector<std::filesystem::path> emit_cabi_module(
         generated.append_line_format(
             "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<const {}*>::from_c_abi(self);",
             class_decl.cpp_name);
-        generated.append_line("    if (__csbind23_self_cpp == nullptr)");
-        generated.append_line("    {");
-        generated.append_line("        return -1;");
-        generated.append_line("    }");
-        generated.append_line("    const auto& __csbind23_dynamic_type = typeid(*__csbind23_self_cpp);");
+        generated.append(R"cpp(
+            if (__csbind23_self_cpp == nullptr)
+            {
+                return -1;
+            }
+            const auto& __csbind23_dynamic_type = typeid(*__csbind23_self_cpp);
+        )cpp");
         for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
         {
             generated.append_line_format("    if (__csbind23_dynamic_type == typeid({}))", module_decl.classes[i].cpp_name);
@@ -522,11 +526,12 @@ std::vector<std::filesystem::path> emit_cabi_module(
         generated.append_line_format(
             "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
             class_decl.cpp_name);
-        generated.append_line("    if (__csbind23_self_cpp == nullptr)");
-        generated.append_line("    {");
-        generated.append_line("        return nullptr;");
-        generated.append_line("    }");
-        generated.append_line();
+        generated.append(R"cpp(
+            if (__csbind23_self_cpp == nullptr)
+            {
+                return nullptr;
+            }
+        )cpp");
         generated.append_line("    switch (target_type_id)");
         generated.append_line("    {");
         for (std::size_t i = 0; i < module_decl.classes.size(); ++i)

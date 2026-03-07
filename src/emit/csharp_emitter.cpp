@@ -403,82 +403,83 @@ void emit_shared_pinvoke_types_if_needed(
     TextWriter shared(256);
     shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
-    shared.append_line("public static class CsBind23Utf8Interop");
-    shared.append_line("{");
-    shared.append_line("    public static System.IntPtr StringToNative(string value)");
-    shared.append_line("    {");
-    shared.append_line("        string text = value ?? string.Empty;");
-    shared.append_line("        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);");
-    shared.append_line("        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes.Length + 1);");
-    shared.append_line("        if (bytes.Length != 0)");
-    shared.append_line("        {");
-    shared.append_line("            System.Runtime.InteropServices.Marshal.Copy(bytes, 0, ptr, bytes.Length);");
-    shared.append_line("        }");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.WriteByte(ptr, bytes.Length, 0);");
-    shared.append_line("        return ptr;");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static string NativeToString(System.IntPtr ptr)");
-    shared.append_line("    {");
-    shared.append_line("        if (ptr == System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            return string.Empty;");
-    shared.append_line("        }");
-    shared.append_line();
-    shared.append_line("        int length = 0;");
-    shared.append_line("        while (System.Runtime.InteropServices.Marshal.ReadByte(ptr, length) != 0)");
-    shared.append_line("        {");
-    shared.append_line("            length++; ");
-    shared.append_line("        }");
-    shared.append_line();
-    shared.append_line("        if (length == 0)");
-    shared.append_line("        {");
-    shared.append_line("            return string.Empty;");
-    shared.append_line("        }");
-    shared.append_line();
-    shared.append_line("        byte[] bytes = new byte[length];");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(ptr, bytes, 0, length);");
-    shared.append_line("        return System.Text.Encoding.UTF8.GetString(bytes);");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public static void Free(System.IntPtr ptr)");
-    shared.append_line("    {");
-    shared.append_line("        if (ptr != System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);");
-    shared.append_line("        }");
-    shared.append_line("    }");
-    shared.append_line("}");
-    shared.append_line();
+    shared.append(R"cs(
+    public static class CsBind23Utf8Interop
+    {
+        public static System.IntPtr StringToNative(string value)
+        {
+            string text = value ?? string.Empty;
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+            System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes.Length + 1);
+            if (bytes.Length != 0)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(bytes, 0, ptr, bytes.Length);
+            }
+            System.Runtime.InteropServices.Marshal.WriteByte(ptr, bytes.Length, 0);
+            return ptr;
+        }
 
-    shared.append_line("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]");
-    shared.append_line("public readonly struct CsBind23StringView");
-    shared.append_line("{");
-    shared.append_line("    public readonly System.IntPtr str;");
-    shared.append_line("    public readonly nuint length;");
-    shared.append_line();
-    shared.append_line("    public CsBind23StringView(System.IntPtr str, nuint length)");
-    shared.append_line("    {");
-    shared.append_line("        this.str = str;");
-    shared.append_line("        this.length = length;");
-    shared.append_line("    }");
-    shared.append_line("}");
-    shared.append_line();
-    shared.append_line("public static class CsBind23StringViewExtensions");
-    shared.append_line("{");
-    shared.append_line("    public static string ToManaged(CsBind23StringView view)");
-    shared.append_line("    {");
-    shared.append_line("        if (view.str == System.IntPtr.Zero || view.length == 0)");
-    shared.append_line("        {");
-    shared.append_line("            return string.Empty;");
-    shared.append_line("        }");
-    shared.append_line();
-    shared.append_line("        int length = checked((int)view.length);");
-    shared.append_line("        byte[] bytes = new byte[length];");
-    shared.append_line("        System.Runtime.InteropServices.Marshal.Copy(view.str, bytes, 0, length);");
-    shared.append_line("        return System.Text.Encoding.UTF8.GetString(bytes);");
-    shared.append_line("    }");
-    shared.append_line("}");
+        public static string NativeToString(System.IntPtr ptr)
+        {
+            if (ptr == System.IntPtr.Zero)
+            {
+                return string.Empty;
+            }
+
+            int length = 0;
+            while (System.Runtime.InteropServices.Marshal.ReadByte(ptr, length) != 0)
+            {
+                length++;
+            }
+
+            if (length == 0)
+            {
+                return string.Empty;
+            }
+
+            byte[] bytes = new byte[length];
+            System.Runtime.InteropServices.Marshal.Copy(ptr, bytes, 0, length);
+            return System.Text.Encoding.UTF8.GetString(bytes);
+        }
+
+        public static void Free(System.IntPtr ptr)
+        {
+            if (ptr != System.IntPtr.Zero)
+            {
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+            }
+        }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public readonly struct CsBind23StringView
+    {
+        public readonly System.IntPtr str;
+        public readonly nuint length;
+
+        public CsBind23StringView(System.IntPtr str, nuint length)
+        {
+            this.str = str;
+            this.length = length;
+        }
+    }
+
+    public static class CsBind23StringViewExtensions
+    {
+        public static string ToManaged(CsBind23StringView view)
+        {
+            if (view.str == System.IntPtr.Zero || view.length == 0)
+            {
+                return string.Empty;
+            }
+
+            int length = checked((int)view.length);
+            byte[] bytes = new byte[length];
+            System.Runtime.InteropServices.Marshal.Copy(view.str, bytes, 0, length);
+            return System.Text.Encoding.UTF8.GetString(bytes);
+        }
+    }
+    )cs");
 
     generated_files.push_back(write_csharp_file(output_root, "csbind23.types.g.cs", shared.str()));
 }
@@ -495,79 +496,80 @@ void emit_shared_instance_cache_types_if_needed(
     TextWriter shared(1024);
     shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
-    shared.append_line("internal interface IInstanceCache<T>");
-    shared.append_line("    where T : class");
-    shared.append_line("{");
-    shared.append_line("    void Register(System.IntPtr handle, T instance);");
-    shared.append_line("    void Unregister(System.IntPtr handle);");
-    shared.append_line("    bool TryGet(System.IntPtr handle, out T instance);");
-    shared.append_line("}");
-    shared.append_line();
+    shared.append(R"cs(
+    internal interface IInstanceCache<T>
+        where T : class
+    {
+        void Register(System.IntPtr handle, T instance);
+        void Unregister(System.IntPtr handle);
+        bool TryGet(System.IntPtr handle, out T instance);
+    }
 
-    shared.append_line("internal sealed class DefaultInstanceCache<T> : IInstanceCache<T>");
-    shared.append_line("    where T : class");
-    shared.append_line("{");
-    shared.append_line("    private readonly System.Threading.ReaderWriterLockSlim _lock = new System.Threading.ReaderWriterLockSlim(System.Threading.LockRecursionPolicy.NoRecursion);");
-    shared.append_line("    private readonly System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>> _instances =");
-    shared.append_line("        new System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>>();");
-    shared.append_line();
-    shared.append_line("    public void Register(System.IntPtr handle, T instance)");
-    shared.append_line("    {");
-    shared.append_line("        if (handle == System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            return;");
-    shared.append_line("        }");
-    shared.append_line("        _lock.EnterWriteLock();");
-    shared.append_line("        try");
-    shared.append_line("        {");
-    shared.append_line("            _instances[handle] = new System.WeakReference<T>(instance);");
-    shared.append_line("        }");
-    shared.append_line("        finally");
-    shared.append_line("        {");
-    shared.append_line("            _lock.ExitWriteLock();");
-    shared.append_line("        }");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public void Unregister(System.IntPtr handle)");
-    shared.append_line("    {");
-    shared.append_line("        if (handle == System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            return;");
-    shared.append_line("        }");
-    shared.append_line("        _lock.EnterWriteLock();");
-    shared.append_line("        try");
-    shared.append_line("        {");
-    shared.append_line("            _instances.Remove(handle);");
-    shared.append_line("        }");
-    shared.append_line("        finally");
-    shared.append_line("        {");
-    shared.append_line("            _lock.ExitWriteLock();");
-    shared.append_line("        }");
-    shared.append_line("    }");
-    shared.append_line();
-    shared.append_line("    public bool TryGet(System.IntPtr handle, out T instance)");
-    shared.append_line("    {");
-    shared.append_line("        if (handle == System.IntPtr.Zero)");
-    shared.append_line("        {");
-    shared.append_line("            instance = null!;");
-    shared.append_line("            return false;");
-    shared.append_line("        }");
-    shared.append_line("        _lock.EnterReadLock();");
-    shared.append_line("        try");
-    shared.append_line("        {");
-    shared.append_line("            if (_instances.TryGetValue(handle, out var weak) && weak.TryGetTarget(out instance))");
-    shared.append_line("            {");
-    shared.append_line("                return true;");
-    shared.append_line("            }");
-    shared.append_line("        }");
-    shared.append_line("        finally");
-    shared.append_line("        {");
-    shared.append_line("            _lock.ExitReadLock();");
-    shared.append_line("        }");
-    shared.append_line("        instance = null!;");
-    shared.append_line("        return false;");
-    shared.append_line("    }");
-    shared.append_line("}");
+    internal sealed class DefaultInstanceCache<T> : IInstanceCache<T>
+        where T : class
+    {
+        private readonly System.Threading.ReaderWriterLockSlim _lock = new System.Threading.ReaderWriterLockSlim(System.Threading.LockRecursionPolicy.NoRecursion);
+        private readonly System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>> _instances =
+            new System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>>();
+
+        public void Register(System.IntPtr handle, T instance)
+        {
+            if (handle == System.IntPtr.Zero)
+            {
+                return;
+            }
+            _lock.EnterWriteLock();
+            try
+            {
+                _instances[handle] = new System.WeakReference<T>(instance);
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
+        }
+
+        public void Unregister(System.IntPtr handle)
+        {
+            if (handle == System.IntPtr.Zero)
+            {
+                return;
+            }
+            _lock.EnterWriteLock();
+            try
+            {
+                _instances.Remove(handle);
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
+        }
+
+        public bool TryGet(System.IntPtr handle, out T instance)
+        {
+            if (handle == System.IntPtr.Zero)
+            {
+                instance = null!;
+                return false;
+            }
+            _lock.EnterReadLock();
+            try
+            {
+                if (_instances.TryGetValue(handle, out var weak) && weak.TryGetTarget(out instance))
+                {
+                    return true;
+                }
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+            instance = null!;
+            return false;
+        }
+    }
+    )cs");
 
     generated_files.push_back(write_csharp_file(output_root, "csbind23.instance_cache.g.cs", shared.str()));
 }
@@ -589,7 +591,8 @@ void emit_shared_array_interop_types_if_needed(
     TextWriter shared(1024);
     shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
-    shared.append(R"(public static class CsBind23ArrayInterop
+    shared.append(R"cs(
+    public static class CsBind23ArrayInterop
     {
         public static System.IntPtr IntArrayToNativeFixed(int[] value, int expectedLength)
         {
@@ -671,7 +674,7 @@ void emit_shared_array_interop_types_if_needed(
             }
         }
     }
-)" );
+    )cs");
 
     generated_files.push_back(write_csharp_file(output_root, "csbind23.array.g.cs", shared.str()));
 }
@@ -688,11 +691,13 @@ void emit_shared_item_ownership_type_if_needed(
     TextWriter shared(128);
     shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     shared.append_line();
-    shared.append_line("public enum ItemOwnership");
-    shared.append_line("{");
-    shared.append_line("    Borrowed = 0,");
-    shared.append_line("    Owned = 1,");
-    shared.append_line("}");
+    shared.append(R"cs(
+public enum ItemOwnership
+{
+    Borrowed = 0,
+    Owned = 1,
+}
+)cs");
 
     generated_files.push_back(write_csharp_file(output_root, "csbind23.ownership.g.cs", shared.str()));
 }
