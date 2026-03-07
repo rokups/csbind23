@@ -213,27 +213,23 @@ inline void register_bindings_class_generic(BindingsGenerator& generator, std::s
             []<typename T>() { return &class_generic::RefGenericOps::add_to_ref<T>; },
             int,
             double>(
-            "add_to_ref_generic",
-            csbind23::CppSymbols{"add_to_ref<int>", "add_to_ref<double>"})
+            "add_to_ref_generic")
         .def_generic<
             []<typename T>() { return &class_generic::RefGenericOps::add_to_out<T>; },
             int,
             double>(
             "add_to_out_generic",
-            csbind23::CppSymbols{"add_to_out<int>", "add_to_out<double>"},
             csbind23::Arg{.idx = 2, .name = "result", .output = true})
         .def_generic<
             []<typename T>() { return &class_generic::RefGenericOps::add_to_ptr<T>; },
             int,
             double>(
-            "add_to_ptr_generic",
-            csbind23::CppSymbols{"add_to_ptr<int>", "add_to_ptr<double>"})
+            "add_to_ptr_generic")
         .def_generic<
             []<typename T, typename U>() { return &class_generic::RefGenericOps::add_mixed<T, U>; },
             csbind23::TemplateArgs<int, double>,
             csbind23::TemplateArgs<double, int>>(
-            "add_mixed_generic",
-            csbind23::CppSymbols{"add_mixed<int, double>", "add_mixed<double, int>"});
+            "add_mixed_generic");
 }
 
 } // namespace csbind23::testing

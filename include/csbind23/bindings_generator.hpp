@@ -191,6 +191,67 @@ consteval auto resolve_nontype_from_spec()
     return TemplateSpecExpander<Spec>::template resolve_nontype<Resolver>();
 }
 
+template <typename Spec>
+struct TemplateSpecRenderer
+{
+    static void append_cpp_args(std::vector<std::string>& args)
+    {
+        args.push_back(detail::cpp_type_name<Spec>());
+    }
+};
+
+template <typename... Types>
+struct TemplateSpecRenderer<TemplateArgs<Types...>>
+{
+    static void append_cpp_args(std::vector<std::string>& args)
+    {
+        (args.push_back(detail::cpp_type_name<Types>()), ...);
+    }
+};
+
+template <typename Spec>
+std::vector<std::string> template_spec_cpp_args()
+{
+    std::vector<std::string> args;
+    TemplateSpecRenderer<Spec>::append_cpp_args(args);
+    return args;
+}
+
+inline bool symbol_has_function_template_args(std::string_view symbol)
+{
+    const std::size_t last_scope = symbol.rfind("::");
+    const std::string_view trailing =
+        last_scope == std::string_view::npos ? symbol : symbol.substr(last_scope + 2);
+    return trailing.find('<') != std::string_view::npos;
+}
+
+template <typename Spec>
+std::string instantiate_symbol_from_spec(std::string base_symbol)
+{
+    if (base_symbol.empty() || symbol_has_function_template_args(base_symbol))
+    {
+        return base_symbol;
+    }
+
+    const auto template_args = template_spec_cpp_args<Spec>();
+    if (template_args.empty())
+    {
+        return base_symbol;
+    }
+
+    base_symbol += "<";
+    for (std::size_t index = 0; index < template_args.size(); ++index)
+    {
+        base_symbol += template_args[index];
+        if (index + 1 < template_args.size())
+        {
+            base_symbol += ", ";
+        }
+    }
+    base_symbol += ">";
+    return base_symbol;
+}
+
 } // namespace detail
 
 class BindingsGenerator
@@ -791,12 +852,18 @@ public:
     ClassBuilder& def_generic(std::string_view name, Options&&... options)
     {
         const auto def_options = make_method_def_options(std::forward<Options>(options)...);
-        add_generic_method_instantiation_auto<detail::resolve_nontype_from_spec<MethodResolver, FirstSpec>()>(
-            name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, 0));
+        constexpr auto first_method_ptr = detail::resolve_nontype_from_spec<MethodResolver, FirstSpec>();
+        add_generic_method_instantiation_auto<first_method_ptr>(name, def_options,
+            resolve_generic_method_cpp_symbol<first_method_ptr, FirstSpec>(
+                def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, 0)));
 
         std::size_t index = 1;
-        (add_generic_method_instantiation_auto<detail::resolve_nontype_from_spec<MethodResolver, RestSpecs>()>(
-             name, def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index++)),
+        ([&] {
+            constexpr auto method_ptr = detail::resolve_nontype_from_spec<MethodResolver, RestSpecs>();
+            add_generic_method_instantiation_auto<method_ptr>(name, def_options,
+                resolve_generic_method_cpp_symbol<method_ptr, RestSpecs>(
+                    def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index++)));
+        }(),
             ...);
         return *this;
     }
@@ -1123,6 +1190,23 @@ private:
             : std::string(def_options.cpp_symbol));
 
         add_generic_method_instantiation(name, MethodPtr, def_options, cpp_symbol);
+    }
+
+    template <auto MethodPtr, typename Spec>
+    static std::string resolve_generic_method_cpp_symbol(
+        const MethodDefOptions& def_options, std::string_view cpp_symbol_override = {})
+    {
+        if (!cpp_symbol_override.empty())
+        {
+            return std::string(cpp_symbol_override);
+        }
+
+        if (!def_options.cpp_symbol.empty())
+        {
+            return detail::instantiate_symbol_from_spec<Spec>(std::string(def_options.cpp_symbol));
+        }
+
+        return detail::instantiate_symbol_from_spec<Spec>(std::string(detail::function_symbol_name<MethodPtr>()));
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
