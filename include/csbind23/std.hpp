@@ -226,8 +226,8 @@ inline std::string make_vector_wrapper_csharp_code(std::string_view wrapper_name
             }
         }
 
-        var handle = clone._cPtr;
-        clone._cPtr = System.IntPtr.Zero;
+        var handle = clone._cPtr.Handle;
+        clone._cPtr = new System.Runtime.InteropServices.HandleRef(clone, System.IntPtr.Zero);
         clone._ownership = __CSBIND23_ITEM_OWNERSHIP__.Borrowed;
         System.GC.SuppressFinalize(clone);
         return handle;

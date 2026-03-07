@@ -368,7 +368,7 @@ private:
                 : ".Borrowed");
 
         type_ref.managed_type_name = qualified_managed_class;
-        type_ref.managed_to_pinvoke_expression = "({value}?._cPtr ?? System.IntPtr.Zero)";
+        type_ref.managed_to_pinvoke_expression = "({value} == null ? System.IntPtr.Zero : {value}._cPtr.Handle)";
         type_ref.managed_from_pinvoke_expression = std::format(
             "({})global::{}.{}Runtime.WrapPolymorphic_{}({{value}}, {})",
             qualified_managed_class,
