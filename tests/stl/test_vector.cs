@@ -1,7 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
 using CsBind23.Generated;
+using CsBind23.Generated.Std;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;
@@ -9,9 +9,9 @@ namespace CsBind23.Tests.E2E;
 public class VectorTests
 {
     [Fact]
-    public void VectorList_Implements_List_Interfaces()
+    public void Vector_Implements_List_Interfaces()
     {
-        using var value = new VectorList<int>();
+        using var value = new Vector<int>();
         Assert.IsAssignableFrom<IList<int>>(value);
         Assert.IsAssignableFrom<ICollection<int>>(value);
         Assert.IsAssignableFrom<IEnumerable<int>>(value);
@@ -19,9 +19,9 @@ public class VectorTests
     }
 
     [Fact]
-    public void VectorList_Int_List_Operations_Work()
+    public void Vector_Int_List_Operations_Work()
     {
-        using var value = new VectorList<int>();
+        using var value = new Vector<int>();
         value.Add(1);
         value.Add(2);
         value.Add(4);
@@ -43,9 +43,9 @@ public class VectorTests
     }
 
     [Fact]
-    public void VectorList_Double_CopyTo_And_Clear_Work()
+    public void Vector_Double_CopyTo_And_Clear_Work()
     {
-        using var value = new VectorList<double>();
+        using var value = new Vector<double>();
         value.Add(1.5);
         value.Add(2.5);
         value.Add(3.5);
@@ -59,9 +59,9 @@ public class VectorTests
     }
 
     [Fact]
-    public void VectorList_Throws_On_Invalid_Index()
+    public void Vector_Throws_On_Invalid_Index()
     {
-        using var value = new VectorList<int>();
+        using var value = new Vector<int>();
         value.Add(7);
         value.Add(8);
 
@@ -72,20 +72,20 @@ public class VectorTests
     }
 
     [Fact]
-    public void VectorList_Throws_For_Unmapped_Generic_Type()
+    public void Vector_Throws_For_Unmapped_Generic_Type()
     {
         var ex = Assert.Throws<NotSupportedException>(() =>
         {
-            using var _ = new VectorList<float>();
+            using var _ = new Vector<float>();
         });
 
         Assert.Contains("generic mapping", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void VectorList_VectorItem_Returns_Borrowed_Wrapper()
+    public void Vector_VectorItem_Uses_NonOwning_Wrapper()
     {
-        using var list = new VectorList<VectorItem>();
+        using var list = new Vector<VectorItem>(ItemOwnership.Owned);
         using var source = new VectorItem(10);
         list.Add(source);
 
@@ -93,14 +93,30 @@ public class VectorTests
         var typed = Assert.IsType<VectorItem>(item);
         Assert.Equal(10, typed.get());
 
-        var ownsHandleField = typeof(VectorItem).GetField("_ownsHandle", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(ownsHandleField);
-        Assert.False((bool)ownsHandleField!.GetValue(typed)!);
-
         typed.set(42);
         Assert.Equal(42, list[0].get());
 
         typed.Dispose();
         Assert.Equal(42, list[0].get());
+    }
+
+    [Fact]
+    public void Vector_VectorItemPointer_Can_Take_Ownership_And_Destroy_Manually()
+    {
+        using var list = new Vector<VectorItem>(ItemOwnership.Borrowed);
+        using var source = new VectorItem(123);
+        source.ReleaseOwnership();
+        list.Add(source);
+
+        var borrowed = list[0];
+        borrowed.Dispose();
+        Assert.Equal(123, source.get());
+
+        borrowed = list[0];
+        borrowed.TakeOwnership();
+
+        list.RemoveAt(0);
+        borrowed.DestroyNative();
+        borrowed.Dispose();
     }
 }

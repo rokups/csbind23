@@ -148,6 +148,7 @@ struct ClassDecl
     bool enable_virtual_overrides = false;
     bool is_generic_instantiation = false;
     std::string generic_group_name;
+    std::string csharp_namespace;
     std::string instance_cache_type;
     std::vector<std::string> csharp_attributes;
     std::string csharp_comment;

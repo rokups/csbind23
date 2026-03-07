@@ -12,6 +12,8 @@
 namespace csbind23::cabi
 {
 
+template <typename Type> struct Converter;
+
 namespace detail
 {
 
@@ -24,6 +26,68 @@ template <typename Type> struct scalar_storage_type<Type, true>
 {
     using type = std::underlying_type_t<Type>;
 };
+
+template <typename ElementType> using bare_element_type_t = std::remove_cv_t<std::remove_reference_t<ElementType>>;
+
+template <typename ElementType> std::string vector_element_managed_type_name()
+{
+    using BareElementType = bare_element_type_t<ElementType>;
+
+    if constexpr (requires { Converter<BareElementType>::managed_type_name(); })
+    {
+        const std::string managed_name = std::string(Converter<BareElementType>::managed_type_name());
+        if (!managed_name.empty())
+        {
+            return managed_name;
+        }
+    }
+
+    return std::string(Converter<BareElementType>::pinvoke_type_name());
+}
+
+template <typename ElementType> std::string vector_managed_type_name()
+{
+    return "Std.Vector<" + vector_element_managed_type_name<ElementType>() + ">";
+}
+
+template <typename ElementType> std::string vector_item_ownership_expression()
+{
+    using BareElementType = bare_element_type_t<ElementType>;
+    if constexpr (std::is_pointer_v<BareElementType>)
+    {
+        return "ItemOwnership.Borrowed";
+    }
+
+    return "ItemOwnership.Owned";
+}
+
+template <typename ElementType> std::string vector_managed_clone_expression()
+{
+    return vector_managed_type_name<ElementType>() + ".CloneOrCreateOwned({value})";
+}
+
+template <typename ElementType> std::string vector_managed_owned_expression()
+{
+    return vector_managed_type_name<ElementType>() + ".FromOwnedHandle({value}, "
+        + vector_item_ownership_expression<ElementType>() + ")";
+}
+
+template <typename ElementType> std::string vector_managed_borrowed_expression()
+{
+    return vector_managed_type_name<ElementType>() + ".FromBorrowedHandle({value}, "
+        + vector_item_ownership_expression<ElementType>() + ")";
+}
+
+template <typename ElementType> std::string vector_managed_borrow_expression()
+{
+    return "({value}?._handle ?? System.IntPtr.Zero)";
+}
+
+template <typename ElementType> std::string vector_managed_destroy_expression()
+{
+    return vector_managed_type_name<ElementType>()
+        + ".DestroyOwnedHandle({pinvoke}, ({managed}?._itemOwnership ?? ItemOwnership.Owned))";
+}
 
 } // namespace detail
 
@@ -630,157 +694,95 @@ template <std::size_t Extent> struct Converter<const std::array<int, Extent>*>
     static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
 };
 
-#define CSBIND23_DECLARE_VECTOR_CONVERTERS(ElementType, CSharpElementName)                                                  \
-    template <> struct Converter<std::vector<ElementType>>                                                                    \
-    {                                                                                                                         \
-        using cpp_type = std::vector<ElementType>;                                                                            \
-        using c_abi_type = const void*;                                                                                       \
-                                                                                                                              \
-        static constexpr std::string_view c_abi_type_name() { return "const void*"; }                                       \
-        static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }                                  \
-        static constexpr std::string_view managed_type_name()                                                                 \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName ">";                                        \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_to_pinvoke_expression()                                                     \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.CloneOrCreateOwned({value})";                                                                         \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_from_pinvoke_expression()                                                   \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.FromOwnedHandle({value})";                                                                            \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_finalize_to_pinvoke_statement()                                             \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.DestroyOwnedHandle({pinvoke})";                                                                       \
-        }                                                                                                                     \
-                                                                                                                              \
-        static c_abi_type to_c_abi(const cpp_type& value)                                                                     \
-        {                                                                                                                     \
-            return static_cast<c_abi_type>(new cpp_type(value));                                                             \
-        }                                                                                                                     \
-                                                                                                                              \
-        static cpp_type from_c_abi(c_abi_type value)                                                                          \
-        {                                                                                                                     \
-            if (value == nullptr)                                                                                             \
-            {                                                                                                                 \
-                return {};                                                                                                    \
-            }                                                                                                                 \
-            return *static_cast<const cpp_type*>(value);                                                                      \
-        }                                                                                                                     \
-    };                                                                                                                        \
-                                                                                                                              \
-    template <> struct Converter<std::vector<ElementType>&>                                                                   \
-    {                                                                                                                         \
-        using cpp_type = std::vector<ElementType>&;                                                                           \
-        using c_abi_type = void*;                                                                                             \
-                                                                                                                              \
-        static constexpr std::string_view c_abi_type_name() { return "void*"; }                                             \
-        static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }                                  \
-        static constexpr std::string_view managed_type_name()                                                                 \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName ">";                                        \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_to_pinvoke_expression()                                                     \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.BorrowHandle({value})";                                                                               \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_from_pinvoke_expression()                                                   \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.FromBorrowedHandle({value})";                                                                         \
-        }                                                                                                                     \
-                                                                                                                              \
-        static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }                              \
-        static cpp_type from_c_abi(c_abi_type value) { return *static_cast<std::vector<ElementType>*>(value); }             \
-    };                                                                                                                        \
-                                                                                                                              \
-    template <> struct Converter<const std::vector<ElementType>&>                                                             \
-    {                                                                                                                         \
-        using cpp_type = const std::vector<ElementType>&;                                                                     \
-        using c_abi_type = const void*;                                                                                       \
-                                                                                                                              \
-        static constexpr std::string_view c_abi_type_name() { return "const void*"; }                                       \
-        static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }                                  \
-        static constexpr std::string_view managed_type_name()                                                                 \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName ">";                                        \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_to_pinvoke_expression()                                                     \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.BorrowHandle({value})";                                                                               \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_from_pinvoke_expression()                                                   \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.FromBorrowedHandle({value})";                                                                         \
-        }                                                                                                                     \
-                                                                                                                              \
-        static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }                              \
-        static cpp_type from_c_abi(c_abi_type value) { return *static_cast<const std::vector<ElementType>*>(value); }       \
-    };                                                                                                                        \
-                                                                                                                              \
-    template <> struct Converter<std::vector<ElementType>*>                                                                   \
-    {                                                                                                                         \
-        using cpp_type = std::vector<ElementType>*;                                                                           \
-        using c_abi_type = void*;                                                                                             \
-                                                                                                                              \
-        static constexpr std::string_view c_abi_type_name() { return "void*"; }                                             \
-        static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }                                  \
-        static constexpr std::string_view managed_type_name()                                                                 \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName ">";                                        \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_to_pinvoke_expression()                                                     \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.BorrowHandle({value})";                                                                               \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_from_pinvoke_expression()                                                   \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.FromBorrowedHandle({value})";                                                                         \
-        }                                                                                                                     \
-                                                                                                                              \
-        static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }                               \
-        static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }                               \
-    };                                                                                                                        \
-                                                                                                                              \
-    template <> struct Converter<const std::vector<ElementType>*>                                                             \
-    {                                                                                                                         \
-        using cpp_type = const std::vector<ElementType>*;                                                                     \
-        using c_abi_type = const void*;                                                                                       \
-                                                                                                                              \
-        static constexpr std::string_view c_abi_type_name() { return "const void*"; }                                       \
-        static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }                                  \
-        static constexpr std::string_view managed_type_name()                                                                 \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName ">";                                        \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_to_pinvoke_expression()                                                     \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.BorrowHandle({value})";                                                                               \
-        }                                                                                                                     \
-        static constexpr std::string_view managed_from_pinvoke_expression()                                                   \
-        {                                                                                                                     \
-            return "global::CsBind23.Generated.VectorList<" CSharpElementName                                               \
-                   ">.FromBorrowedHandle({value})";                                                                         \
-        }                                                                                                                     \
-                                                                                                                              \
-        static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }                               \
-        static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }                               \
+template <typename ElementType> struct Converter<std::vector<ElementType>>
+{
+    using cpp_type = std::vector<ElementType>;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_clone_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_owned_expression<ElementType>(); }
+    static std::string managed_finalize_to_pinvoke_statement()
+    {
+        return detail::vector_managed_destroy_expression<ElementType>();
     }
 
-CSBIND23_DECLARE_VECTOR_CONVERTERS(int, "int");
-CSBIND23_DECLARE_VECTOR_CONVERTERS(double, "double");
+    static c_abi_type to_c_abi(const cpp_type& value)
+    {
+        return static_cast<c_abi_type>(new cpp_type(value));
+    }
 
-#undef CSBIND23_DECLARE_VECTOR_CONVERTERS
+    static cpp_type from_c_abi(c_abi_type value)
+    {
+        if (value == nullptr)
+        {
+            return {};
+        }
+        return *static_cast<const cpp_type*>(value);
+    }
+};
+
+template <typename ElementType> struct Converter<std::vector<ElementType>&>
+{
+    using cpp_type = std::vector<ElementType>&;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<std::vector<ElementType>*>(value); }
+};
+
+template <typename ElementType> struct Converter<const std::vector<ElementType>&>
+{
+    using cpp_type = const std::vector<ElementType>&;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
+    static cpp_type from_c_abi(c_abi_type value) { return *static_cast<const std::vector<ElementType>*>(value); }
+};
+
+template <typename ElementType> struct Converter<std::vector<ElementType>*>
+{
+    using cpp_type = std::vector<ElementType>*;
+    using c_abi_type = void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
+
+template <typename ElementType> struct Converter<const std::vector<ElementType>*>
+{
+    using cpp_type = const std::vector<ElementType>*;
+    using c_abi_type = const void*;
+
+    static constexpr std::string_view c_abi_type_name() { return "const void*"; }
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static std::string managed_type_name() { return detail::vector_managed_type_name<ElementType>(); }
+    static std::string managed_to_pinvoke_expression() { return detail::vector_managed_borrow_expression<ElementType>(); }
+    static std::string managed_from_pinvoke_expression() { return detail::vector_managed_borrowed_expression<ElementType>(); }
+
+    static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
+    static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
+};
 
 template <typename Type>
     requires(std::is_arithmetic_v<std::remove_cv_t<Type>> || std::is_enum_v<std::remove_cv_t<Type>>)

@@ -634,6 +634,27 @@ void emit_shared_array_interop_types_if_needed(
     generated_files.push_back(write_csharp_file(output_root, "csbind23.array.g.cs", shared.str()));
 }
 
+void emit_shared_item_ownership_type_if_needed(
+    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
+{
+    const auto shared_path = output_root / "csbind23.ownership.g.cs";
+    if (std::filesystem::exists(shared_path))
+    {
+        return;
+    }
+
+    TextWriter shared(128);
+    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    shared.append_line();
+    shared.append_line("public enum ItemOwnership");
+    shared.append_line("{");
+    shared.append_line("    Borrowed = 0,");
+    shared.append_line("    Owned = 1,");
+    shared.append_line("}");
+
+    generated_files.push_back(write_csharp_file(output_root, "csbind23.ownership.g.cs", shared.str()));
+}
+
 std::string pinvoke_return_type(const FunctionDecl& function_decl)
 {
     if (function_decl.is_constructor)
@@ -837,6 +858,7 @@ std::vector<GenericClassGroup> collect_generic_class_groups(const std::vector<Cl
             groups[it->second].instantiations.push_back(&class_decl);
         }
     }
+
     return groups;
 }
 
@@ -957,6 +979,32 @@ std::string csharp_namespace_name(const ModuleDecl& module_decl)
         return module_decl.csharp_namespace;
     }
     return "CsBind23.Generated";
+}
+
+std::string csharp_namespace_name(const ModuleDecl& module_decl, std::string_view relative_namespace)
+{
+    const std::string base_namespace = csharp_namespace_name(module_decl);
+    if (relative_namespace.empty())
+    {
+        return base_namespace;
+    }
+
+    return std::format("{}.{}", base_namespace, relative_namespace);
+}
+
+std::string csharp_namespace_name(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    return csharp_namespace_name(module_decl, class_decl.csharp_namespace);
+}
+
+std::string item_ownership_type_name(const ModuleDecl& module_decl)
+{
+    return std::format("global::{}.ItemOwnership", csharp_namespace_name(module_decl));
+}
+
+std::string item_ownership_literal(const ModuleDecl& module_decl, bool owned)
+{
+    return item_ownership_type_name(module_decl) + (owned ? ".Owned" : ".Borrowed");
 }
 
 std::string resolved_instance_cache_type(const ModuleDecl& module_decl, const ClassDecl& class_decl)
@@ -1740,9 +1788,126 @@ std::string generic_class_type_parameter_name(std::size_t slot, std::size_t clas
     return generic_type_parameter_name(slot, class_generic_arity);
 }
 
+const TypeRef* concrete_type_ref_for_slot(
+    const FunctionDecl& instantiation, const GenericDispatchShape& shape, int slot_id)
+{
+    for (std::size_t index = 0; index < instantiation.parameters.size(); ++index)
+    {
+        if (shape.generic_parameter_slot_ids[index] == slot_id)
+        {
+            return &instantiation.parameters[index].type;
+        }
+    }
+
+    if (shape.generic_return_slot_id == slot_id)
+    {
+        return &instantiation.return_type;
+    }
+
+    return nullptr;
+}
+
+std::string generic_class_slot_tuple_key(const std::vector<std::string>& slot_types)
+{
+    std::string key;
+    for (const auto& slot_type : slot_types)
+    {
+        key += slot_type;
+        key += '|';
+    }
+    return key;
+}
+
+std::vector<bool> collect_generic_class_tuple_ambiguity(const std::vector<std::vector<std::string>>& class_slot_types)
+{
+    std::unordered_map<std::string, std::size_t> counts;
+    for (const auto& slot_types : class_slot_types)
+    {
+        ++counts[generic_class_slot_tuple_key(slot_types)];
+    }
+
+    std::vector<bool> ambiguous(class_slot_types.size(), false);
+    for (std::size_t index = 0; index < class_slot_types.size(); ++index)
+    {
+        ambiguous[index] = counts[generic_class_slot_tuple_key(class_slot_types[index])] > 1;
+    }
+    return ambiguous;
+}
+
+std::vector<bool> collect_generic_class_borrowed_item_modes(
+    const GenericClassGroup& class_group, const std::vector<GenericFunctionGroup>& ctor_groups,
+    const std::vector<GenericFunctionGroup>& method_groups, std::size_t class_generic_arity)
+{
+    std::vector<bool> borrowed_modes(class_group.instantiations.size(), false);
+
+    auto collect_from_groups = [&borrowed_modes, class_generic_arity](const auto& groups) {
+        for (const auto& group : groups)
+        {
+            const auto shape = analyze_generic_dispatch_shape(group);
+            if (!shape.supported)
+            {
+                continue;
+            }
+
+            for (std::size_t inst_index = 0; inst_index < group.instantiations.size(); ++inst_index)
+            {
+                const auto* instantiation = group.instantiations[inst_index];
+                for (std::size_t slot = 0; slot < class_generic_arity; ++slot)
+                {
+                    const auto* type_ref = concrete_type_ref_for_slot(*instantiation, shape, static_cast<int>(slot));
+                    if (type_ref != nullptr && type_ref->is_pointer)
+                    {
+                        borrowed_modes[inst_index] = true;
+                    }
+                }
+            }
+        }
+    };
+
+    collect_from_groups(method_groups);
+    collect_from_groups(ctor_groups);
+    return borrowed_modes;
+}
+
+std::string generic_class_instantiation_condition(const ModuleDecl& module_decl, std::size_t inst_index,
+    std::size_t class_generic_arity, const std::vector<std::vector<std::string>>& class_slot_types,
+    const std::vector<bool>& ambiguous_tuples, const std::vector<bool>& borrowed_item_modes,
+    std::string_view item_ownership_expression)
+{
+    std::string condition;
+    for (std::size_t slot = 0; slot < class_generic_arity; ++slot)
+    {
+        const std::string generic_name = generic_class_type_parameter_name(slot, class_generic_arity);
+        const std::string concrete_name = class_slot_types[inst_index][slot];
+        if (concrete_name.empty())
+        {
+            continue;
+        }
+
+        if (!condition.empty())
+        {
+            condition += " && ";
+        }
+        condition += std::format("typeof({}) == typeof({})", generic_name, concrete_name);
+    }
+
+    if (ambiguous_tuples[inst_index])
+    {
+        if (!condition.empty())
+        {
+            condition += " && ";
+        }
+        condition += std::format("{} == {}", item_ownership_expression,
+            item_ownership_literal(module_decl, !borrowed_item_modes[inst_index]));
+    }
+
+    return condition.empty() ? "true" : condition;
+}
+
 void append_generic_class_constructor(TextWriter& output, const GenericClassGroup& class_group,
     const ModuleDecl& module_decl, const GenericFunctionGroup& ctor_group, std::size_t class_generic_arity,
-    const std::vector<std::vector<std::string>>& class_slot_types)
+    const std::vector<std::vector<std::string>>& class_slot_types, const std::vector<bool>& ambiguous_tuples,
+    const std::vector<bool>& borrowed_item_modes)
 {
     const auto shape = analyze_generic_dispatch_shape(ctor_group);
     const bool use_shape_for_parameters = shape.supported;
@@ -1761,6 +1926,11 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
             output.append(", ");
         }
     }
+    if (!first.parameters.empty())
+    {
+        output.append(", ");
+    }
+    output.append_format("{} itemOwnership = {}", item_ownership_type_name(module_decl), item_ownership_literal(module_decl, true));
     output.append_line(")");
     output.append_line("    {");
 
@@ -1768,28 +1938,9 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
     {
         const auto* instantiation = ctor_group.instantiations[inst_index];
         const auto* class_decl = class_group.instantiations[inst_index];
-
-        std::string condition;
-        for (std::size_t slot = 0; slot < class_generic_arity; ++slot)
-        {
-            const std::string generic_name = generic_class_type_parameter_name(slot, class_generic_arity);
-            const std::string concrete_name = class_slot_types[inst_index][slot];
-            if (concrete_name.empty())
-            {
-                continue;
-            }
-
-            if (!condition.empty())
-            {
-                condition += " && ";
-            }
-            condition += std::format("typeof({}) == typeof({})", generic_name, concrete_name);
-        }
-
-        if (condition.empty())
-        {
-            condition = "true";
-        }
+        const std::string condition = generic_class_instantiation_condition(
+            module_decl, inst_index, class_generic_arity, class_slot_types, ambiguous_tuples, borrowed_item_modes,
+            "itemOwnership");
 
         output.append_line_format("        if ({})", condition);
         output.append_line("        {");
@@ -1896,7 +2047,9 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
             output.append_line("            }");
         }
 
-        output.append_line_format("            _ownsHandle = {} ;", class_has_owned_ctor(*class_decl) ? "true" : "false");
+        output.append_line_format(
+            "            _ownership = {} ;", item_ownership_literal(module_decl, class_has_owned_ctor(*class_decl)));
+        output.append_line("            _itemOwnership = itemOwnership ;");
         output.append_line("            return;");
         output.append_line("        }");
     }
@@ -1965,7 +2118,8 @@ std::vector<std::vector<std::string>> collect_generic_class_slot_types(
 
 void append_generic_class_method(TextWriter& output, const ModuleDecl& module_decl, const GenericClassGroup& class_group,
     const GenericFunctionGroup& method_group, std::size_t class_generic_arity,
-    const std::vector<std::vector<std::string>>& class_slot_types)
+    const std::vector<std::vector<std::string>>& class_slot_types, const std::vector<bool>& ambiguous_tuples,
+    const std::vector<bool>& borrowed_item_modes)
 {
     const auto shape = analyze_generic_dispatch_shape(method_group);
     const bool use_shape_for_parameters = shape.supported;
@@ -2003,27 +2157,9 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
     for (std::size_t inst_index = 0; inst_index < method_group.instantiations.size(); ++inst_index)
     {
         const auto* instantiation = method_group.instantiations[inst_index];
-        std::string condition;
-        for (std::size_t slot = 0; slot < class_generic_arity; ++slot)
-        {
-            const std::string generic_name = generic_class_type_parameter_name(slot, class_generic_arity);
-            const std::string concrete_name = class_slot_types[inst_index][slot];
-            if (concrete_name.empty())
-            {
-                continue;
-            }
-
-            if (!condition.empty())
-            {
-                condition += " && ";
-            }
-            condition += std::format("typeof({}) == typeof({})", generic_name, concrete_name);
-        }
-
-        if (condition.empty())
-        {
-            condition = "true";
-        }
+        const std::string condition = generic_class_instantiation_condition(
+            module_decl, inst_index, class_generic_arity, class_slot_types, ambiguous_tuples, borrowed_item_modes,
+            "_itemOwnership");
 
         output.append_line_format("        if ({})", condition);
         output.append_line("        {");
@@ -2270,9 +2406,10 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                     {
                         output.append_line_format("            {}", post_assignment);
                     }
-                    output.append_line_format("            return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, false);",
+                    output.append_line_format("            return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, {});",
                         module_decl.name,
-                        polymorphic_return_class->name);
+                        polymorphic_return_class->name,
+                        item_ownership_literal(module_decl, false));
                 }
                 else
                 {
@@ -2283,9 +2420,10 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                     {
                         output.append_line_format("                {}", post_assignment);
                     }
-                    output.append_line_format("                return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, false);",
+                    output.append_line_format("                return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, {});",
                         module_decl.name,
-                        polymorphic_return_class->name);
+                        polymorphic_return_class->name,
+                        item_ownership_literal(module_decl, false));
                     output.append_line("            }");
                     output.append_line("            finally");
                     output.append_line("            {");
@@ -2429,6 +2567,9 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
 
     const auto class_slot_types =
         collect_generic_class_slot_types(class_group, ctor_groups, method_groups, class_generic_arity);
+    const auto ambiguous_tuples = collect_generic_class_tuple_ambiguity(class_slot_types);
+    const auto borrowed_item_modes =
+        collect_generic_class_borrowed_item_modes(class_group, ctor_groups, method_groups, class_generic_arity);
 
     std::vector<std::string> base_types;
     base_types.push_back("System.IDisposable");
@@ -2456,33 +2597,38 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         generic_type_parameter_list(class_generic_arity),
         base_clause);
     output.append_line("{");
-    output.append_line("    private System.IntPtr _handle;");
-    output.append_line("    private bool _ownsHandle;");
+    output.append_line("    internal System.IntPtr _handle;");
+    output.append_line_format("    private {} _ownership;", item_ownership_type_name(module_decl));
+    output.append_line_format("    internal {} _itemOwnership;", item_ownership_type_name(module_decl));
     output.append_line();
 
-    output.append_line_format("    internal {}(System.IntPtr handle, bool ownsHandle)",
-        managed_name(module_decl, CSharpNameKind::Class, class_group.name));
+    output.append_line_format("    internal {}(System.IntPtr handle, {} ownership, {} itemOwnership = {})",
+        managed_name(module_decl, CSharpNameKind::Class, class_group.name), item_ownership_type_name(module_decl),
+        item_ownership_type_name(module_decl), item_ownership_literal(module_decl, true));
     output.append_line("    {");
     output.append_line("        _handle = handle;");
-    output.append_line("        _ownsHandle = ownsHandle;");
+    output.append_line("        _ownership = ownership;");
+    output.append_line("        _itemOwnership = itemOwnership;");
     output.append_line("    }");
     output.append_line();
 
     for (const auto& ctor_group : ctor_groups)
     {
-        append_generic_class_constructor(output, class_group, module_decl, ctor_group, class_generic_arity, class_slot_types);
+        append_generic_class_constructor(output, class_group, module_decl, ctor_group, class_generic_arity,
+            class_slot_types, ambiguous_tuples, borrowed_item_modes);
     }
 
     for (const auto& method_group : method_groups)
     {
-        append_generic_class_method(output, module_decl, class_group, method_group, class_generic_arity, class_slot_types);
+        append_generic_class_method(output, module_decl, class_group, method_group, class_generic_arity,
+            class_slot_types, ambiguous_tuples, borrowed_item_modes);
     }
 
     for (const auto& snippet : first_class_decl.csharp_member_snippets)
     {
         if (!snippet.empty())
         {
-            output.append_line(snippet);
+            output.append_line(replace_all(snippet, "__CSBIND23_ITEM_OWNERSHIP__", item_ownership_type_name(module_decl)));
             output.append_line();
         }
     }
@@ -2500,31 +2646,14 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     output.append_line("            return;");
     output.append_line("        }");
     output.append_line();
-    output.append_line("        if (_ownsHandle)");
+    output.append_line_format("        if (_ownership == {})", item_ownership_literal(module_decl, true));
     output.append_line("        {");
     for (std::size_t inst_index = 0; inst_index < class_group.instantiations.size(); ++inst_index)
     {
         const auto* class_decl = class_group.instantiations[inst_index];
-        std::string condition;
-        for (std::size_t slot = 0; slot < class_generic_arity; ++slot)
-        {
-            const std::string concrete_name = class_slot_types[inst_index][slot];
-            if (concrete_name.empty())
-            {
-                continue;
-            }
-
-            if (!condition.empty())
-            {
-                condition += " && ";
-            }
-            condition += std::format("typeof({}) == typeof({})", generic_class_type_parameter_name(slot, class_generic_arity), concrete_name);
-        }
-
-        if (condition.empty())
-        {
-            condition = "true";
-        }
+        const std::string condition = generic_class_instantiation_condition(
+            module_decl, inst_index, class_generic_arity, class_slot_types, ambiguous_tuples, borrowed_item_modes,
+            "_itemOwnership");
 
         if (inst_index == 0)
         {
@@ -2544,7 +2673,7 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     output.append_line("        }");
     output.append_line();
     output.append_line("        _handle = System.IntPtr.Zero;");
-    output.append_line("        _ownsHandle = false;");
+    output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
     output.append_line("    }");
     output.append_line();
 
@@ -2892,7 +3021,8 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     {
         const std::string native_result_name = "__csbind23_result_ptr";
         const std::string wrapped_result = std::format(
-            "{}Runtime.WrapPolymorphic_{}({}, false)", module_name, polymorphic_return_class->name, native_result_name);
+            "{}Runtime.WrapPolymorphic_{}({}, {})", module_name, polymorphic_return_class->name, native_result_name,
+            item_ownership_literal(module_decl, false));
 
         if (!needs_finally)
         {
@@ -3282,22 +3412,22 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     if (!has_base_class)
     {
         const std::string handle_field_visibility = (has_virtual_support || is_primary_base_class) ? "protected" : "private";
-        output.append_line_format("    {} System.IntPtr _handle;", handle_field_visibility);
-        output.append_line_format("    {} bool _ownsHandle;", handle_field_visibility);
+        output.append_line("    internal System.IntPtr _handle;");
+        output.append_line_format("    {} {} _ownership;", handle_field_visibility, item_ownership_type_name(module_decl));
     }
     output.append_line();
 
-    output.append_format("    internal {}(System.IntPtr handle, bool ownsHandle)", managed_class);
+    output.append_format("    internal {}(System.IntPtr handle, {} ownership)", managed_class, item_ownership_type_name(module_decl));
     if (has_base_class)
     {
-        output.append(" : base(handle, ownsHandle)");
+        output.append(" : base(handle, ownership)");
     }
     output.append_line("");
     output.append_line("    {");
     if (!has_base_class)
     {
         output.append_line("        _handle = handle;");
-        output.append_line("        _ownsHandle = ownsHandle;");
+        output.append_line("        _ownership = ownership;");
         if (has_virtual_support)
         {
             output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
@@ -3327,7 +3457,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append(")");
         if (has_base_class)
         {
-            output.append(" : base(System.IntPtr.Zero, false)");
+            output.append_format(" : base(System.IntPtr.Zero, {})", item_ownership_literal(module_decl, false));
         }
         output.append_line("");
         output.append_line("    {");
@@ -3426,7 +3556,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
             output.append_line("        }");
         }
 
-        output.append_line_format("        _ownsHandle = {};", owns_handle ? "true" : "false");
+        output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, owns_handle));
         if (has_virtual_support)
         {
             output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
@@ -3448,6 +3578,50 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line("        System.GC.SuppressFinalize(this);");
         output.append_line("    }");
         output.append_line();
+
+        if (emits_destroy)
+        {
+            output.append_line("    public void TakeOwnership()");
+            output.append_line("    {");
+            output.append_line("        if (_handle == System.IntPtr.Zero)");
+            output.append_line("        {");
+            output.append_line("            return;");
+            output.append_line("        }");
+            output.append_line();
+            output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, true));
+            output.append_line("    }");
+            output.append_line();
+
+            output.append_line("    public void ReleaseOwnership()");
+            output.append_line("    {");
+            output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
+            output.append_line("    }");
+            output.append_line();
+
+            output.append_line("    public void DestroyNative()");
+            output.append_line("    {");
+            output.append_line("        if (_handle == System.IntPtr.Zero)");
+            output.append_line("        {");
+            output.append_line("            return;");
+            output.append_line("        }");
+            output.append_line();
+            output.append_line("        var __csbind23_oldHandle = _handle;");
+
+            if (has_virtual_support)
+            {
+                output.append_line_format(
+                    "        {}Native.{}_{}_disconnect_director(_handle);", module_name, module_name, class_decl.name);
+            }
+
+            output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
+            output.append_line_format(
+                "        {}Native.{}_{}_destroy(_handle);", module_name, module_name, class_decl.name);
+            output.append_line("        _handle = System.IntPtr.Zero;");
+            output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
+            output.append_line("        System.GC.SuppressFinalize(this);");
+            output.append_line("    }");
+            output.append_line();
+        }
 
         output.append_line_format("    ~{}()", managed_class);
         output.append_line("    {");
@@ -3473,7 +3647,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
         output.append_line();
 
-        output.append_line("        if (_ownsHandle)");
+        output.append_line_format("        if (_ownership == {})", item_ownership_literal(module_decl, true));
         output.append_line("        {");
         if (emits_destroy)
         {
@@ -3483,7 +3657,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append_line("        }");
         output.append_line();
         output.append_line("        _handle = System.IntPtr.Zero;");
-        output.append_line("        _ownsHandle = false;");
+        output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
         output.append_line("    }");
         output.append_line();
     }
@@ -3609,7 +3783,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     {
         if (!snippet.empty())
         {
-            output.append_line(snippet);
+            output.append_line(replace_all(snippet, "__CSBIND23_ITEM_OWNERSHIP__", item_ownership_type_name(module_decl)));
             output.append_line();
         }
     }
@@ -3626,6 +3800,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::filesystem::create_directories(output_root);
 
     std::vector<std::filesystem::path> generated_files;
+    emit_shared_item_ownership_type_if_needed(module_decl, output_root, generated_files);
     emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
     emit_shared_instance_cache_types_if_needed(module_decl, output_root, generated_files);
     emit_shared_array_interop_types_if_needed(module_decl, output_root, generated_files);
@@ -3641,7 +3816,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
             }
 
             TextWriter interface_file(512);
-            interface_file.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+            interface_file.append_line_format("namespace {};", csharp_namespace_name(module_decl, *secondary_base));
             interface_file.append_line();
             append_interface_declaration(interface_file, module_decl, *secondary_base);
             generated_files.push_back(write_csharp_file(
@@ -3760,19 +3935,21 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     generated.append_line_format("internal static class {}Runtime", module_decl.name);
     generated.append_line("{");
-    generated.append_line("    private static readonly System.Func<System.IntPtr, bool, object>[] __csbind23_typeFactories =");
-    generated.append_line("        new System.Func<System.IntPtr, bool, object>[]");
+    generated.append_line_format(
+        "    private static readonly System.Func<System.IntPtr, {}, object>[] __csbind23_typeFactories =",
+        item_ownership_type_name(module_decl));
+    generated.append_line_format("        new System.Func<System.IntPtr, {}, object>[]", item_ownership_type_name(module_decl));
     generated.append_line("        {");
     for (const auto& class_decl : module_decl.classes)
     {
         if (class_decl.is_generic_instantiation)
         {
-            generated.append_line("            (handle, ownsHandle) => handle,");
+            generated.append_line("            (handle, ownership) => handle,");
         }
         else
         {
             generated.append_line_format(
-                "            (handle, ownsHandle) => new {}(handle, ownsHandle),", managed_class_name(module_decl, class_decl));
+                "            (handle, ownership) => new {}(handle, ownership),", managed_class_name(module_decl, class_decl));
         }
     }
     generated.append_line("        };");
@@ -3781,7 +3958,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
     for (const auto& class_decl : module_decl.classes)
     {
         generated.append_line_format(
-            "    internal static object WrapPolymorphic_{}(System.IntPtr handle, bool ownsHandle)", class_decl.name);
+            "    internal static object WrapPolymorphic_{}(System.IntPtr handle, {} ownership)", class_decl.name,
+            item_ownership_type_name(module_decl));
         generated.append_line("    {");
         generated.append_line("        if (handle == System.IntPtr.Zero)");
         generated.append_line("        {");
@@ -3795,7 +3973,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
             class_decl.name);
         generated.append_line("        if (dynamicTypeId >= 0 && dynamicTypeId < __csbind23_typeFactories.Length)");
         generated.append_line("        {");
-        generated.append_line("            return __csbind23_typeFactories[dynamicTypeId](handle, ownsHandle);");
+        generated.append_line("            return __csbind23_typeFactories[dynamicTypeId](handle, ownership);");
         generated.append_line("        }");
         generated.append_line();
         if (class_decl.is_generic_instantiation)
@@ -3804,7 +3982,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         else
         {
-            generated.append_line_format("        return new {}(handle, ownsHandle);", managed_class_name(module_decl, class_decl));
+            generated.append_line_format("        return new {}(handle, ownership);", managed_class_name(module_decl, class_decl));
         }
         generated.append_line("    }");
         generated.append_line();
@@ -4024,10 +4202,11 @@ std::vector<std::filesystem::path> emit_csharp_module(
             {
                 const std::string native_result_name = "__csbind23_result_ptr";
                 const std::string wrapped_result = std::format(
-                    "{}Runtime.WrapPolymorphic_{}({}, false)",
+                    "{}Runtime.WrapPolymorphic_{}({}, {})",
                     module_decl.name,
                     polymorphic_return_class->name,
-                    native_result_name);
+                    native_result_name,
+                    item_ownership_literal(module_decl, false));
 
                 if (!needs_finally)
                 {
@@ -4206,7 +4385,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
 
         TextWriter class_file(2048);
-        class_file.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+        class_file.append_line_format("namespace {};", csharp_namespace_name(module_decl, class_decl));
         class_file.append_line();
         append_wrapper_class(class_file, module_decl, module_decl.name, class_decl);
 
@@ -4219,7 +4398,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
     for (const auto& generic_class_group : generic_class_groups)
     {
         TextWriter generic_class_file(2048);
-        generic_class_file.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+        generic_class_file.append_line_format(
+            "namespace {};", csharp_namespace_name(module_decl, *generic_class_group.instantiations.front()));
         generic_class_file.append_line();
         append_generic_class_wrapper(generic_class_file, module_decl, generic_class_group);
 

@@ -286,6 +286,12 @@ public:
     }
 
 private:
+    struct BoundClassMatch
+    {
+        const ModuleDecl* module_decl = nullptr;
+        const ClassDecl* class_decl = nullptr;
+    };
+
     template <typename Type> static void assign_managed_converter(TypeRef& type_ref)
     {
         type_ref.managed_type_name = std::string(cabi::detail::managed_type_name_for<Type>());
@@ -297,6 +303,79 @@ private:
             std::string(cabi::detail::managed_finalize_to_pinvoke_statement_for<Type>());
         type_ref.managed_finalize_from_pinvoke_statement =
             std::string(cabi::detail::managed_finalize_from_pinvoke_statement_for<Type>());
+    }
+
+    static std::string csharp_namespace_name_for(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+    {
+        const std::string base_namespace =
+            module_decl.csharp_namespace.empty() ? std::string("CsBind23.Generated") : module_decl.csharp_namespace;
+        if (class_decl.csharp_namespace.empty())
+        {
+            return base_namespace;
+        }
+
+        return base_namespace + "." + class_decl.csharp_namespace;
+    }
+
+    static std::string managed_class_name_for(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+    {
+        if (!module_decl.csharp_name_formatter)
+        {
+            return class_decl.name;
+        }
+
+        const std::string formatted = module_decl.csharp_name_formatter(CSharpNameKind::Class, class_decl.name);
+        return formatted.empty() ? class_decl.name : formatted;
+    }
+
+    BoundClassMatch find_bound_class(std::string_view cpp_name) const
+    {
+        for (const auto& module_decl : modules_)
+        {
+            for (const auto& class_decl : module_decl.classes)
+            {
+                if (class_decl.cpp_name == cpp_name)
+                {
+                    return BoundClassMatch{&module_decl, &class_decl};
+                }
+            }
+        }
+
+        return {};
+    }
+
+    template <typename Type> void assign_bound_class_managed_converter(TypeRef& type_ref) const
+    {
+        using NoRef = std::remove_reference_t<Type>;
+        using Base = std::remove_cv_t<std::remove_pointer_t<NoRef>>;
+        if constexpr (!std::is_class_v<Base>)
+        {
+            return;
+        }
+
+        const auto match = find_bound_class(detail::qualified_type_name<Base>());
+        if (match.module_decl == nullptr || match.class_decl == nullptr)
+        {
+            return;
+        }
+
+        const std::string csharp_namespace = csharp_namespace_name_for(*match.module_decl, *match.class_decl);
+        const std::string managed_class = managed_class_name_for(*match.module_decl, *match.class_decl);
+        const std::string qualified_managed_class = "global::" + csharp_namespace + "." + managed_class;
+        const std::string ownership_type = "global::" + csharp_namespace + ".ItemOwnership";
+        const std::string ownership_literal = ownership_type + (!std::is_reference_v<Type> && !std::is_pointer_v<NoRef>
+                ? ".Owned"
+                : ".Borrowed");
+
+        type_ref.managed_type_name = qualified_managed_class;
+        type_ref.managed_to_pinvoke_expression = "({value}?._handle ?? System.IntPtr.Zero)";
+        type_ref.managed_from_pinvoke_expression = std::format(
+            "({})global::{}.{}Runtime.WrapPolymorphic_{}({{value}}, {})",
+            qualified_managed_class,
+            csharp_namespace,
+            match.module_decl->name,
+            match.class_decl->name,
+            ownership_literal);
     }
 
     template <typename Type> void apply_managed_converter(TypeRef& type_ref) const
@@ -322,6 +401,16 @@ private:
         if constexpr (!std::is_same_v<Base, Bare>)
         {
             assign_managed_converter<Base>(type_ref);
+            if (type_ref.has_managed_converter())
+            {
+                return;
+            }
+        }
+
+        assign_bound_class_managed_converter<Type>(type_ref);
+        if (type_ref.has_managed_converter())
+        {
+            return;
         }
 
         using EnumBase = std::remove_cv_t<std::remove_pointer_t<NoRef>>;
@@ -703,6 +792,12 @@ public:
     ClassBuilder& csharp_interface(std::string_view interface_name)
     {
         class_decl_->csharp_interfaces.push_back(std::string(interface_name));
+        return *this;
+    }
+
+    ClassBuilder& csharp_namespace(std::string_view namespace_name)
+    {
+        class_decl_->csharp_namespace = std::string(namespace_name);
         return *this;
     }
 
@@ -1387,6 +1482,15 @@ public:
         for (const auto class_index : class_indices_)
         {
             module_decl_->classes[class_index].csharp_interfaces.push_back(std::string(interface_name));
+        }
+        return *this;
+    }
+
+    GenericClassBuilder& csharp_namespace(std::string_view namespace_name)
+    {
+        for (const auto class_index : class_indices_)
+        {
+            module_decl_->classes[class_index].csharp_namespace = std::string(namespace_name);
         }
         return *this;
     }
