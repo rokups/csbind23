@@ -128,12 +128,7 @@ private:
 
     static bool should_decrease_indent_before(std::string_view trimmed_line)
     {
-        if (trimmed_line == "}")
-        {
-            return true;
-        }
-
-        return !trimmed_line.empty() && trimmed_line.back() == '}';
+        return !trimmed_line.empty() && trimmed_line.front() == '}';
     }
 
     static bool should_increase_indent_after(std::string_view trimmed_line)

@@ -28,6 +28,11 @@ namespace csbind23::emit
 namespace
 {
 
+constexpr std::string_view shared_support_namespace()
+{
+    return "CsBind23.Generated";
+}
+
 std::string csharp_namespace_name(const ModuleDecl& module_decl);
 std::string wrapper_type_name(const TypeRef& type_ref);
 
@@ -400,8 +405,14 @@ void emit_shared_pinvoke_types_if_needed(
         return;
     }
 
+    const auto shared_path = output_root / "csbind23.types.g.cs";
+    if (std::filesystem::exists(shared_path))
+    {
+        return;
+    }
+
     TextWriter shared(256);
-    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    shared.append_line_format("namespace {};", shared_support_namespace());
     shared.append_line();
     shared.append(R"cs(
     public static class CsBind23Utf8Interop
@@ -494,7 +505,7 @@ void emit_shared_instance_cache_types_if_needed(
     }
 
     TextWriter shared(1024);
-    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    shared.append_line_format("namespace {};", shared_support_namespace());
     shared.append_line();
     shared.append(R"cs(
     internal interface IInstanceCache<T>
@@ -589,7 +600,7 @@ void emit_shared_array_interop_types_if_needed(
     }
 
     TextWriter shared(1024);
-    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    shared.append_line_format("namespace {};", shared_support_namespace());
     shared.append_line();
     shared.append(R"cs(
     public static class CsBind23ArrayInterop
@@ -688,14 +699,84 @@ void emit_shared_item_ownership_type_if_needed(
         return;
     }
 
-    TextWriter shared(128);
-    shared.append_line_format("namespace {};", csharp_namespace_name(module_decl));
+    TextWriter shared(1024);
+    shared.append_line_format("namespace {};", shared_support_namespace());
     shared.append_line();
     shared.append(R"cs(
 public enum ItemOwnership
 {
     Borrowed = 0,
     Owned = 1,
+}
+
+public abstract class CsBind23Object : System.IDisposable
+{
+    internal System.Runtime.InteropServices.HandleRef _cPtr;
+    protected ItemOwnership _ownership;
+
+    protected CsBind23Object(System.IntPtr handle, ItemOwnership ownership)
+    {
+        _cPtr = new System.Runtime.InteropServices.HandleRef(this, handle);
+        _ownership = ownership;
+    }
+
+    protected void SetHandle(System.IntPtr handle, ItemOwnership ownership)
+    {
+        _cPtr = new System.Runtime.InteropServices.HandleRef(this, handle);
+        _ownership = ownership;
+    }
+
+    protected void TakeOwnershipCore()
+    {
+        if (_cPtr.Handle == System.IntPtr.Zero)
+        {
+            return;
+        }
+
+        _ownership = ItemOwnership.Owned;
+    }
+
+    protected void ReleaseOwnershipCore()
+    {
+        _ownership = ItemOwnership.Borrowed;
+    }
+
+    protected void ReleaseUnmanagedCore()
+    {
+        ReleaseHandle(_ownership);
+    }
+
+    protected void DestroyOwnedHandleCore()
+    {
+        ReleaseHandle(ItemOwnership.Owned);
+        System.GC.SuppressFinalize(this);
+    }
+
+    private void ReleaseHandle(ItemOwnership ownership)
+    {
+        if (_cPtr.Handle == System.IntPtr.Zero)
+        {
+            return;
+        }
+
+        var handle = _cPtr.Handle;
+        ReleaseNativeHandle(handle, ownership);
+        _cPtr = new System.Runtime.InteropServices.HandleRef(this, System.IntPtr.Zero);
+        _ownership = ItemOwnership.Borrowed;
+    }
+
+    protected abstract void ReleaseNativeHandle(System.IntPtr handle, ItemOwnership ownership);
+
+    public void Dispose()
+    {
+        ReleaseUnmanagedCore();
+        System.GC.SuppressFinalize(this);
+    }
+
+    ~CsBind23Object()
+    {
+        ReleaseUnmanagedCore();
+    }
 }
 )cs");
 
@@ -1113,12 +1194,18 @@ std::string csharp_namespace_name(const ModuleDecl& module_decl, const ClassDecl
 
 std::string item_ownership_type_name(const ModuleDecl& module_decl)
 {
-    return std::format("global::{}.ItemOwnership", csharp_namespace_name(module_decl));
+    (void)module_decl;
+    return std::format("global::{}.ItemOwnership", shared_support_namespace());
 }
 
 std::string item_ownership_literal(const ModuleDecl& module_decl, bool owned)
 {
     return item_ownership_type_name(module_decl) + (owned ? ".Owned" : ".Borrowed");
+}
+
+std::string csbind23_object_type_name()
+{
+    return std::format("global::{}.CsBind23Object", shared_support_namespace());
 }
 
 std::string resolved_instance_cache_type(const ModuleDecl& module_decl, const ClassDecl& class_decl)
@@ -1127,7 +1214,10 @@ std::string resolved_instance_cache_type(const ModuleDecl& module_decl, const Cl
         ? class_decl.instance_cache_type
         : (!module_decl.instance_cache_type.empty() ? module_decl.instance_cache_type : "DefaultInstanceCache<T>");
     const std::string managed_class = format_csharp_name(module_decl, CSharpNameKind::Class, class_decl.name);
-    return replace_all(configured, "<T>", std::format("<{}>", managed_class));
+    const std::string qualified_configured = configured == "DefaultInstanceCache<T>"
+        ? "global::CsBind23.Generated.DefaultInstanceCache<T>"
+        : configured;
+    return replace_all(qualified_configured, "<T>", std::format("<{}>", managed_class));
 }
 
 std::string managed_name(const ModuleDecl& module_decl, CSharpNameKind kind, std::string_view raw_name)
@@ -2076,6 +2166,7 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
     }
     output.append_format("{} itemOwnership = {}", item_ownership_type_name(module_decl), item_ownership_literal(module_decl, true));
     output.append_line(")");
+    output.append_line_format("        : base(System.IntPtr.Zero, {})", item_ownership_literal(module_decl, false));
     output.append_line("    {");
 
     for (std::size_t inst_index = 0; inst_index < ctor_group.instantiations.size(); ++inst_index)
@@ -2174,13 +2265,19 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
 
         if (finalize_statements.empty())
         {
-            output.append_line_format("            _cPtr = new System.Runtime.InteropServices.HandleRef(this, {}) ;", native_call);
+            output.append_line_format(
+                "            SetHandle({}, {}) ;",
+                native_call,
+                item_ownership_literal(module_decl, class_has_owned_ctor(*class_decl)));
         }
         else
         {
             output.append_line("            try");
             output.append_line("            {");
-            output.append_line_format("                _cPtr = new System.Runtime.InteropServices.HandleRef(this, {}) ;", native_call);
+            output.append_line_format(
+                "                SetHandle({}, {}) ;",
+                native_call,
+                item_ownership_literal(module_decl, class_has_owned_ctor(*class_decl)));
             output.append_line("            }");
             output.append_line("            finally");
             output.append_line("            {");
@@ -2190,9 +2287,6 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
             }
             output.append_line("            }");
         }
-
-        output.append_line_format(
-            "            _ownership = {} ;", item_ownership_literal(module_decl, class_has_owned_ctor(*class_decl)));
         output.append_line("            _itemOwnership = itemOwnership ;");
         output.append_line("            return;");
         output.append_line("        }");
@@ -2719,7 +2813,7 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         collect_generic_class_borrowed_item_modes(class_group, ctor_groups, method_groups, class_generic_arity);
 
     std::vector<std::string> base_types;
-    base_types.push_back("System.IDisposable");
+    base_types.push_back(csbind23_object_type_name());
     const auto& first_class_decl = *class_group.instantiations.front();
     for (const auto& interface_name : first_class_decl.csharp_interfaces)
     {
@@ -2744,17 +2838,14 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         generic_type_parameter_list(class_generic_arity),
         base_clause);
     output.append_line("{");
-    output.append_line("    internal System.Runtime.InteropServices.HandleRef _cPtr;");
-    output.append_line_format("    private {} _ownership;", item_ownership_type_name(module_decl));
     output.append_line_format("    internal {} _itemOwnership;", item_ownership_type_name(module_decl));
     output.append_line();
 
     output.append_line_format("    internal {}(System.IntPtr handle, {} ownership, {} itemOwnership = {})",
         managed_name(module_decl, CSharpNameKind::Class, class_group.name), item_ownership_type_name(module_decl),
         item_ownership_type_name(module_decl), item_ownership_literal(module_decl, true));
+    output.append_line("        : base(handle, ownership)");
     output.append_line("    {");
-    output.append_line("        _cPtr = new System.Runtime.InteropServices.HandleRef(this, handle);");
-    output.append_line("        _ownership = ownership;");
     output.append_line("        _itemOwnership = itemOwnership;");
     output.append_line("    }");
     output.append_line();
@@ -2780,20 +2871,9 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         }
     }
 
-    output.append_line("    ~" + managed_name(module_decl, CSharpNameKind::Class, class_group.name) + "()");
+    output.append_line_format("    protected override void ReleaseNativeHandle(System.IntPtr handle, {} ownership)", item_ownership_type_name(module_decl));
     output.append_line("    {");
-    output.append_line("        ReleaseUnmanaged();");
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line("    private void ReleaseUnmanaged()");
-    output.append_line("    {");
-    output.append_line("        if (_cPtr.Handle == System.IntPtr.Zero)");
-    output.append_line("        {");
-    output.append_line("            return;");
-    output.append_line("        }");
-    output.append_line();
-    output.append_line_format("        if (_ownership == {})", item_ownership_literal(module_decl, true));
+    output.append_line_format("        if (ownership == {})", item_ownership_literal(module_decl, true));
     output.append_line("        {");
     for (std::size_t inst_index = 0; inst_index < class_group.instantiations.size(); ++inst_index)
     {
@@ -2813,21 +2893,11 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         output.append_line("            {");
         if (class_has_owned_ctor(*class_decl))
         {
-            output.append_line_format("                {}Native.{}_{}_destroy(_cPtr.Handle);", module_decl.name, module_decl.name, class_decl->name);
+            output.append_line_format("                {}Native.{}_{}_destroy(handle);", module_decl.name, module_decl.name, class_decl->name);
         }
         output.append_line("            }");
     }
     output.append_line("        }");
-    output.append_line();
-    output.append_line("        _cPtr = new System.Runtime.InteropServices.HandleRef(this, System.IntPtr.Zero);");
-    output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
-    output.append_line("    }");
-    output.append_line();
-
-    output.append_line("    public void Dispose()");
-    output.append_line("    {");
-    output.append_line("        ReleaseUnmanaged();");
-    output.append_line("        System.GC.SuppressFinalize(this);");
     output.append_line("    }");
     output.append_line("}");
     output.append_line();
@@ -3532,7 +3602,7 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
     }
     else
     {
-        base_types.push_back("System.IDisposable");
+        base_types.push_back(csbind23_object_type_name());
     }
     for (const auto& secondary_base : secondary_base_classes(all_modules, module_decl, class_decl))
     {
@@ -3565,12 +3635,6 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
     append_csharp_comment(output, "", class_decl.csharp_comment);
     output.append_line_format("{} {} {} : {}", class_visibility, class_declaration_kind, managed_class, base_clause);
     output.append_line("{");
-    if (!has_base_class)
-    {
-        const std::string handle_field_visibility = (has_virtual_support || is_primary_base_class) ? "protected" : "private";
-        output.append_line("    internal System.Runtime.InteropServices.HandleRef _cPtr;");
-        output.append_line_format("    {} {} _ownership;", handle_field_visibility, item_ownership_type_name(module_decl));
-    }
     output.append_line();
 
     output.append_format("    internal {}(System.IntPtr handle, {} ownership)", managed_class, item_ownership_type_name(module_decl));
@@ -3579,16 +3643,15 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
         output.append_format(" : base(handle, {})",
             translate_item_ownership_expression(module_decl, *base_class.module_decl, "ownership"));
     }
+    else
+    {
+        output.append(" : base(handle, ownership)");
+    }
     output.append_line("");
     output.append_line("    {");
-    if (!has_base_class)
+    if (!has_base_class && has_virtual_support)
     {
-        output.append_line("        _cPtr = new System.Runtime.InteropServices.HandleRef(this, handle);");
-        output.append_line("        _ownership = ownership;");
-        if (has_virtual_support)
-        {
-            output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
-        }
+        output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
     }
     output.append_line("        __csbind23_registry.Register(_cPtr.Handle, this);");
     if (!has_base_class && has_virtual_support)
@@ -3617,6 +3680,10 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
             output.append_format(" : base(System.IntPtr.Zero, {})",
                 translate_item_ownership_expression(
                     module_decl, *base_class.module_decl, item_ownership_literal(module_decl, false)));
+        }
+        else
+        {
+            output.append_format(" : base(System.IntPtr.Zero, {})", item_ownership_literal(module_decl, false));
         }
         output.append_line("");
         output.append_line("    {");
@@ -3689,13 +3756,13 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
         if (finalize_statements.empty())
         {
-            output.append_line_format("        _cPtr = new System.Runtime.InteropServices.HandleRef(this, {});", native_call);
+            output.append_line_format("        SetHandle({}, {});", native_call, item_ownership_literal(module_decl, owns_handle));
         }
         else
         {
             output.append_line("        try");
             output.append_line("        {");
-            output.append_line_format("            _cPtr = new System.Runtime.InteropServices.HandleRef(this, {});", native_call);
+            output.append_line_format("            SetHandle({}, {});", native_call, item_ownership_literal(module_decl, owns_handle));
             output.append_line("        }");
             output.append_line("        finally");
             output.append_line("        {");
@@ -3715,7 +3782,6 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
             output.append_line("        }");
         }
 
-        output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, owns_handle));
         if (has_virtual_support)
         {
             output.append_line("        __csbind23_InitializeDerivedOverrideFlags();");
@@ -3731,92 +3797,47 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
     if (!has_base_class)
     {
-        output.append_line("    public void Dispose()");
-        output.append_line("    {");
-        output.append_line("        ReleaseUnmanaged();");
-        output.append_line("        System.GC.SuppressFinalize(this);");
-        output.append_line("    }");
-        output.append_line();
-
         if (emits_destroy)
         {
             output.append_line("    public void TakeOwnership()");
             output.append_line("    {");
-            output.append_line("        if (_cPtr.Handle == System.IntPtr.Zero)");
-            output.append_line("        {");
-            output.append_line("            return;");
-            output.append_line("        }");
-            output.append_line();
-            output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, true));
+            output.append_line("        TakeOwnershipCore();");
             output.append_line("    }");
             output.append_line();
 
             output.append_line("    public void ReleaseOwnership()");
             output.append_line("    {");
-            output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
+            output.append_line("        ReleaseOwnershipCore();");
             output.append_line("    }");
             output.append_line();
 
             output.append_line("    public void DestroyNative()");
             output.append_line("    {");
-            output.append_line("        if (_cPtr.Handle == System.IntPtr.Zero)");
-            output.append_line("        {");
-            output.append_line("            return;");
-            output.append_line("        }");
-            output.append_line();
-            output.append_line("        var __csbind23_oldHandle = _cPtr.Handle;");
-
-            if (has_virtual_support)
-            {
-                output.append_line_format(
-                    "        {}Native.{}_{}_disconnect_director(_cPtr.Handle);", module_name, module_name, class_decl.name);
-            }
-
-            output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
-            output.append_line_format(
-                "        {}Native.{}_{}_destroy(_cPtr.Handle);", module_name, module_name, class_decl.name);
-            output.append_line("        _cPtr = new System.Runtime.InteropServices.HandleRef(this, System.IntPtr.Zero);");
-            output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
-            output.append_line("        System.GC.SuppressFinalize(this);");
+            output.append_line("        DestroyOwnedHandleCore();");
             output.append_line("    }");
             output.append_line();
         }
 
-        output.append_line_format("    ~{}()", managed_class);
+        output.append_line_format("    protected override void ReleaseNativeHandle(System.IntPtr handle, {} ownership)", item_ownership_type_name(module_decl));
         output.append_line("    {");
-        output.append_line("        ReleaseUnmanaged();");
-        output.append_line("    }");
-        output.append_line();
-
-        output.append_line("    private void ReleaseUnmanaged()");
-        output.append_line("    {");
-        output.append_line("        if (_cPtr.Handle == System.IntPtr.Zero)");
-        output.append_line("        {");
-        output.append_line("            return;");
-        output.append_line("        }");
-        output.append_line();
-
-        output.append_line("        var __csbind23_oldHandle = _cPtr.Handle;");
+        output.append_line("        var __csbind23_oldHandle = handle;");
 
         if (has_virtual_support)
         {
-            output.append_line_format("        {}Native.{}_{}_disconnect_director(_cPtr.Handle);", module_name, module_name, class_decl.name);
+            output.append_line_format("        {}Native.{}_{}_disconnect_director(handle);", module_name, module_name, class_decl.name);
         }
 
         output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
         output.append_line();
 
-        output.append_line_format("        if (_ownership == {})", item_ownership_literal(module_decl, true));
+        output.append_line_format("        if (ownership == {})", item_ownership_literal(module_decl, true));
         output.append_line("        {");
         if (emits_destroy)
         {
             output.append_line_format(
-                "            {}Native.{}_{}_destroy(_cPtr.Handle);", module_name, module_name, class_decl.name);
+                "            {}Native.{}_{}_destroy(handle);", module_name, module_name, class_decl.name);
         }
         output.append_line("        }");
-        output.append_line();
-        output.append_line("        _cPtr = new System.Runtime.InteropServices.HandleRef(this, System.IntPtr.Zero);");
-        output.append_line_format("        _ownership = {};", item_ownership_literal(module_decl, false));
         output.append_line("    }");
         output.append_line();
     }
@@ -4102,95 +4123,98 @@ std::vector<std::filesystem::path> emit_csharp_module(
         generated.append_line();
     }
 
-    generated.append_line_format("internal static class {}Runtime", module_decl.name);
-    generated.append_line("{");
-    generated.append_line_format(
-        "    private static readonly System.Func<System.IntPtr, {}, object>[] __csbind23_typeFactories =",
-        item_ownership_type_name(module_decl));
-    generated.append_line_format("        new System.Func<System.IntPtr, {}, object>[]", item_ownership_type_name(module_decl));
-    generated.append_line("        {");
-    for (const auto& class_decl : module_decl.classes)
+    if (!module_decl.classes.empty())
     {
-        if (class_decl.is_generic_instantiation)
-        {
-            generated.append_line("            (handle, ownership) => handle,");
-        }
-        else
-        {
-            generated.append_line_format(
-                "            (handle, ownership) => new {}(handle, ownership),", qualified_managed_class_name(module_decl, class_decl));
-        }
-    }
-    generated.append_line("        };");
-    generated.append_line();
-
-    for (const auto& class_decl : module_decl.classes)
-    {
-        const auto assignable_classes = polymorphic_assignable_classes(all_modules, class_decl.cpp_name);
+        generated.append_line_format("internal static class {}Runtime", module_decl.name);
+        generated.append_line("{");
         generated.append_line_format(
-            "    internal static object WrapPolymorphic_{}(System.IntPtr handle, {} ownership)", class_decl.name,
+            "    private static readonly System.Func<System.IntPtr, {}, object>[] __csbind23_typeFactories =",
             item_ownership_type_name(module_decl));
-        generated.append_line("    {");
-        generated.append_line("        if (handle == System.IntPtr.Zero)");
+        generated.append_line_format("        new System.Func<System.IntPtr, {}, object>[]", item_ownership_type_name(module_decl));
         generated.append_line("        {");
-        generated.append_line("            return null!;");
-        generated.append_line("        }");
-        generated.append_line();
-        generated.append_line_format(
-            "        int dynamicTypeId = {}Native.{}_{}_dynamic_type_id(handle);",
-            module_decl.name,
-            module_decl.name,
-            class_decl.name);
-        generated.append_line("        switch (dynamicTypeId)");
-        generated.append_line("        {");
-        for (std::size_t index = 0; index < assignable_classes.size(); ++index)
+        for (const auto& class_decl : module_decl.classes)
         {
-            const auto& assignable_class = assignable_classes[index];
-            generated.append_line_format("        case {}:", index);
-            generated.append_line("        {");
-            generated.append_line_format(
-                "            System.IntPtr adjustedHandle = {}Native.{}_{}_cast(handle, {});",
-                module_decl.name,
-                module_decl.name,
-                class_decl.name,
-                index);
-            generated.append_line("            if (adjustedHandle == System.IntPtr.Zero)");
-            generated.append_line("            {");
-            generated.append_line("                break;");
-            generated.append_line("            }");
-            if (assignable_class.class_decl->is_generic_instantiation)
+            if (class_decl.is_generic_instantiation)
             {
-                generated.append_line("            return adjustedHandle;");
+                generated.append_line("            (handle, ownership) => handle,");
             }
             else
             {
                 generated.append_line_format(
-                    "            return new {}(adjustedHandle, {});",
-                    qualified_managed_class_name(*assignable_class.module_decl, *assignable_class.class_decl),
-                    translate_item_ownership_expression(
-                        module_decl, *assignable_class.module_decl, "ownership"));
+                    "            (handle, ownership) => new {}(handle, ownership),", qualified_managed_class_name(module_decl, class_decl));
+            }
+        }
+        generated.append_line("        };");
+        generated.append_line();
+
+        for (const auto& class_decl : module_decl.classes)
+        {
+            const auto assignable_classes = polymorphic_assignable_classes(all_modules, class_decl.cpp_name);
+            generated.append_line_format(
+                "    internal static object WrapPolymorphic_{}(System.IntPtr handle, {} ownership)", class_decl.name,
+                item_ownership_type_name(module_decl));
+            generated.append_line("    {");
+            generated.append_line("        if (handle == System.IntPtr.Zero)");
+            generated.append_line("        {");
+            generated.append_line("            return null!;");
+            generated.append_line("        }");
+            generated.append_line();
+            generated.append_line_format(
+                "        int dynamicTypeId = {}Native.{}_{}_dynamic_type_id(handle);",
+                module_decl.name,
+                module_decl.name,
+                class_decl.name);
+            generated.append_line("        switch (dynamicTypeId)");
+            generated.append_line("        {");
+            for (std::size_t index = 0; index < assignable_classes.size(); ++index)
+            {
+                const auto& assignable_class = assignable_classes[index];
+                generated.append_line_format("        case {}:", index);
+                generated.append_line("        {");
+                generated.append_line_format(
+                    "            System.IntPtr adjustedHandle = {}Native.{}_{}_cast(handle, {});",
+                    module_decl.name,
+                    module_decl.name,
+                    class_decl.name,
+                    index);
+                generated.append_line("            if (adjustedHandle == System.IntPtr.Zero)");
+                generated.append_line("            {");
+                generated.append_line("                break;");
+                generated.append_line("            }");
+                if (assignable_class.class_decl->is_generic_instantiation)
+                {
+                    generated.append_line("            return adjustedHandle;");
+                }
+                else
+                {
+                    generated.append_line_format(
+                        "            return new {}(adjustedHandle, {});",
+                        qualified_managed_class_name(*assignable_class.module_decl, *assignable_class.class_decl),
+                        translate_item_ownership_expression(
+                            module_decl, *assignable_class.module_decl, "ownership"));
+                }
+                generated.append_line("        }");
             }
             generated.append_line("        }");
+            generated.append_line();
+            if (class_decl.is_generic_instantiation)
+            {
+                generated.append_line("        return handle;");
+            }
+            else
+            {
+                generated.append_line_format(
+                    "        return new {}(handle, {});",
+                    qualified_managed_class_name(module_decl, class_decl),
+                    translate_item_ownership_expression(module_decl, module_decl, "ownership"));
+            }
+            generated.append_line("    }");
+            generated.append_line();
         }
-        generated.append_line("        }");
-        generated.append_line();
-        if (class_decl.is_generic_instantiation)
-        {
-            generated.append_line("        return handle;");
-        }
-        else
-        {
-            generated.append_line_format(
-                "        return new {}(handle, {});",
-                qualified_managed_class_name(module_decl, class_decl),
-                translate_item_ownership_expression(module_decl, module_decl, "ownership"));
-        }
-        generated.append_line("    }");
+
+        generated.append_line("}");
         generated.append_line();
     }
-
-    generated.append_line("}");
-    generated.append_line();
 
     generated.append_line_format("public static class {}", csharp_api_class_name(module_decl));
     generated.append_line("{");

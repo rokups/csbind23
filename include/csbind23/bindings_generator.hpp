@@ -710,7 +710,7 @@ private:
         const std::string csharp_namespace = csharp_namespace_name_for(*match.module_decl, *match.class_decl);
         const std::string managed_class = managed_class_name_for(*match.module_decl, *match.class_decl);
         const std::string qualified_managed_class = "global::" + csharp_namespace + "." + managed_class;
-        const std::string ownership_type = "global::" + csharp_namespace + ".ItemOwnership";
+        const std::string ownership_type = "global::CsBind23.Generated.ItemOwnership";
         const std::string ownership_literal = ownership_type + (!type_ref.is_reference && !type_ref.is_pointer ? ".Owned" : ".Borrowed");
 
         type_ref.managed_type_name = qualified_managed_class;
