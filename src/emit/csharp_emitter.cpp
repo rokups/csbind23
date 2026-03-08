@@ -9,6 +9,7 @@
 #include "csbind23/text_writer.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -391,6 +392,31 @@ bool managed_type_is_array(std::string_view type_name)
     return type_name.size() >= 2 && type_name.substr(type_name.size() - 2) == "[]";
 }
 
+std::string normalized_c_array_expression(std::string_view expression)
+{
+    std::string normalized;
+    normalized.reserve(expression.size());
+    for (const unsigned char ch : expression)
+    {
+        if (!std::isspace(ch))
+        {
+            normalized.push_back(static_cast<char>(ch));
+        }
+    }
+    return normalized;
+}
+
+bool c_array_expression_is_identity(std::string_view expression)
+{
+    if (expression.empty())
+    {
+        return true;
+    }
+
+    const std::string normalized = normalized_c_array_expression(expression);
+    return normalized == "{value}" || normalized == "({value})";
+}
+
 std::optional<std::string> supported_c_array_element_type(const ParameterDecl& parameter)
 {
     if (!parameter.is_c_array)
@@ -427,8 +453,11 @@ std::string sanitized_csharp_type_name(std::string type_name)
 
 bool c_array_uses_element_converter(const ParameterDecl& parameter)
 {
-    return !parameter.type.managed_to_pinvoke_expression.empty() || !parameter.type.managed_from_pinvoke_expression.empty();
+    return !c_array_expression_is_identity(parameter.type.managed_to_pinvoke_expression)
+        || !c_array_expression_is_identity(parameter.type.managed_from_pinvoke_expression);
 }
+
+std::string c_array_native_element_type_name(const ParameterDecl& parameter);
 
 bool c_array_can_use_pinned_storage(const ModuleDecl& module_decl, const ParameterDecl& parameter)
 {
@@ -444,7 +473,8 @@ bool c_array_can_use_pinned_storage(const ModuleDecl& module_decl, const Paramet
         return false;
     }
 
-    return csharp_type_is_value_type(module_decl, *element_type);
+    (void)module_decl;
+    return sanitized_csharp_type_name(*element_type) == c_array_native_element_type_name(parameter);
 }
 
 std::string c_array_native_element_type_name(const ParameterDecl& parameter)
@@ -493,7 +523,7 @@ std::string render_c_array_to_native_expression(
 {
     const std::string managed_element_type = supported_c_array_element_type(parameter).value_or("System.IntPtr");
     const std::string native_element_type = c_array_native_element_type_name(parameter);
-    if (!parameter.type.managed_to_pinvoke_expression.empty())
+    if (!c_array_expression_is_identity(parameter.type.managed_to_pinvoke_expression))
     {
         return std::format(
             "global::CsBind23.Generated.CsBind23ArrayInterop.ArrayToNativeCounted<{}, {}>({}, {}, nameof({}), static element => {})",
@@ -529,7 +559,7 @@ std::string render_c_array_finalize_statement(
 
     const std::string managed_element_type = supported_c_array_element_type(parameter).value_or("System.IntPtr");
     const std::string native_element_type = c_array_native_element_type_name(parameter);
-    if (!parameter.type.managed_from_pinvoke_expression.empty())
+    if (!c_array_expression_is_identity(parameter.type.managed_from_pinvoke_expression))
     {
         return std::format(
             "global::CsBind23.Generated.CsBind23ArrayInterop.NativeToExistingArrayCounted<{}, {}>({}, {}, {}, nameof({}), static element => {})\n"
@@ -584,9 +614,57 @@ std::optional<FixedManagedArrayInfo> fixed_managed_array_info(const ParameterDec
 struct PinnedArrayParameter
 {
     std::string pinned_name;
-    std::string managed_name;
+    std::string parameter_name;
+    std::string managed_expression;
     std::string element_type;
+    std::optional<std::size_t> expected_length;
 };
+
+std::string fixed_managed_array_identity_to_pinvoke_expression(const FixedManagedArrayInfo& info)
+{
+    return std::format(
+        "global::CsBind23.Generated.CsBind23ArrayInterop.ArrayToNativeFixed<{}>({{value}}, {})",
+        info.element_type,
+        info.extent);
+}
+
+std::string fixed_managed_array_identity_finalize_statement(const ParameterDecl& parameter, const FixedManagedArrayInfo& info)
+{
+    if (parameter.type.is_const || (!parameter.type.is_reference && !parameter.type.is_pointer))
+    {
+        return "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({pinvoke})";
+    }
+
+    return std::format(
+        "global::CsBind23.Generated.CsBind23ArrayInterop.NativeToExistingArrayFixed<{}>({{pinvoke}}, {{managed}}, {})\n"
+        "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({{pinvoke}})",
+        info.element_type,
+        info.extent);
+}
+
+bool fixed_managed_array_can_use_pinned_storage(const ParameterDecl& parameter)
+{
+    const auto info = fixed_managed_array_info(parameter);
+    if (!info.has_value())
+    {
+        return false;
+    }
+
+    if (normalized_c_array_expression(parameter.type.managed_to_pinvoke_expression)
+        != normalized_c_array_expression(fixed_managed_array_identity_to_pinvoke_expression(*info)))
+    {
+        return false;
+    }
+
+    const std::string expected_finalize = fixed_managed_array_identity_finalize_statement(parameter, *info);
+    if (normalized_c_array_expression(parameter.type.managed_finalize_to_pinvoke_statement)
+        != normalized_c_array_expression(expected_finalize))
+    {
+        return false;
+    }
+
+    return true;
+}
 
 void append_managed_array_length_validation(
     TextWriter& output, std::string_view indent, std::string_view parameter_name, std::size_t expected_length)
@@ -602,6 +680,21 @@ void append_managed_array_length_validation(
         indent,
         expected_length,
         parameter_name);
+    output.append_line_format("{}}}", indent);
+}
+
+void append_pinned_array_validation(TextWriter& output, std::string_view indent, const PinnedArrayParameter& parameter)
+{
+    if (parameter.expected_length.has_value())
+    {
+        append_managed_array_length_validation(output, indent, parameter.parameter_name, *parameter.expected_length);
+        return;
+    }
+
+    output.append_line_format("{}if ({} == null)", indent, parameter.parameter_name);
+    output.append_line_format("{}{{", indent);
+    output.append_line_format(
+        "{}    throw new System.ArgumentNullException(nameof({}));", indent, parameter.parameter_name);
     output.append_line_format("{}}}", indent);
 }
 
@@ -3013,8 +3106,12 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             if (c_array_can_use_pinned_storage(module_decl, parameter))
             {
                 const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
-                pinned_array_parameters.push_back(
-                    PinnedArrayParameter{pinned_name, parameter.name, supported_c_array_element_type(parameter).value()});
+                pinned_array_parameters.push_back(PinnedArrayParameter{
+                    pinned_name,
+                    parameter.name,
+                    parameter.name,
+                    supported_c_array_element_type(parameter).value(),
+                    std::nullopt});
                 call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
             }
             else
@@ -3037,6 +3134,20 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
                     c_array_count_expression(method_decl, index),
                     native_class_name(module_decl)));
             }
+            continue;
+        }
+
+        if (fixed_managed_array_can_use_pinned_storage(parameter))
+        {
+            const auto info = fixed_managed_array_info(parameter).value();
+            const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+            pinned_array_parameters.push_back(PinnedArrayParameter{
+                pinned_name,
+                parameter.name,
+                parameter.name,
+                info.element_type,
+                info.extent});
+            call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
             continue;
         }
 
@@ -3080,15 +3191,12 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
 
     for (const auto& pinned_parameter : pinned_array_parameters)
     {
-        if (null_checked_pinned_arrays.contains(pinned_parameter.managed_name))
+        if (null_checked_pinned_arrays.contains(pinned_parameter.parameter_name))
         {
             continue;
         }
-        output.append_line_format("        if ({} == null)", pinned_parameter.managed_name);
-        output.append_line("        {");
-        output.append_line_format(
-            "            throw new System.ArgumentNullException(nameof({}));", pinned_parameter.managed_name);
-        output.append_line("        }");
+        append_pinned_array_validation(output, "        ", pinned_parameter);
+        null_checked_pinned_arrays.insert(pinned_parameter.parameter_name);
     }
     if (!pinned_array_parameters.empty())
     {
@@ -3100,7 +3208,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
                 "            fixed ({}* {} = {})",
                 pinned_parameter.element_type,
                 pinned_parameter.pinned_name,
-                pinned_parameter.managed_name);
+                pinned_parameter.managed_expression);
             output.append_line("            {");
         }
     }
@@ -3593,6 +3701,20 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
         for (std::size_t index = 0; index < method_decl.parameters.size(); ++index)
         {
             const auto& parameter = method_decl.parameters[index];
+            if (fixed_managed_array_can_use_pinned_storage(parameter))
+            {
+                const auto info = fixed_managed_array_info(parameter).value();
+                const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+                pinned_array_parameters.push_back(PinnedArrayParameter{
+                    pinned_name,
+                    parameter.name,
+                    parameter.name,
+                    info.element_type,
+                    info.extent});
+                converted_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
+                continue;
+            }
+
             if (!parameter.type.managed_to_pinvoke_expression.empty())
             {
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
@@ -3621,6 +3743,18 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
             ? std::format("{}.{}()", native_class, create_name)
             : std::format("{}.{}({})", native_class, create_name, converted_arguments_rendered);
 
+        std::unordered_set<std::string> null_checked_pinned_arrays;
+
+        for (const auto& pinned_parameter : pinned_array_parameters)
+        {
+            if (null_checked_pinned_arrays.contains(pinned_parameter.parameter_name))
+            {
+                continue;
+            }
+            append_pinned_array_validation(output, "        ", pinned_parameter);
+            null_checked_pinned_arrays.insert(pinned_parameter.parameter_name);
+        }
+
         if (!pinned_array_parameters.empty())
         {
             output.append_line("        unsafe");
@@ -3631,7 +3765,7 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
                     "            fixed ({}* {} = {})",
                     pinned_parameter.element_type,
                     pinned_parameter.pinned_name,
-                    pinned_parameter.managed_name);
+                    pinned_parameter.managed_expression);
                 output.append_line("            {");
             }
         }
@@ -4190,8 +4324,12 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 if (c_array_can_use_pinned_storage(module_decl, parameter))
                 {
                     const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
-                    pinned_array_parameters.push_back(
-                        PinnedArrayParameter{pinned_name, parameter.name, supported_c_array_element_type(parameter).value()});
+                    pinned_array_parameters.push_back(PinnedArrayParameter{
+                        pinned_name,
+                        parameter.name,
+                        managed_argument_expr,
+                        supported_c_array_element_type(parameter).value(),
+                        std::nullopt});
                     call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
                 }
                 else
@@ -4214,6 +4352,20 @@ std::vector<std::filesystem::path> emit_csharp_module(
                         c_array_count_expression(function_decl, index),
                         native_class_name(module_decl)));
                 }
+                continue;
+            }
+
+            if (fixed_managed_array_can_use_pinned_storage(parameter))
+            {
+                const auto info = fixed_managed_array_info(parameter).value();
+                const std::string pinned_name = std::format("__csbind23_arg{}_pinned", index);
+                pinned_array_parameters.push_back(PinnedArrayParameter{
+                    pinned_name,
+                    parameter.name,
+                    managed_argument_expr,
+                    info.element_type,
+                    info.extent});
+                call_arguments.push_back(std::format("(System.IntPtr){}", pinned_name));
                 continue;
             }
 
@@ -4261,15 +4413,12 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
         for (const auto& pinned_parameter : pinned_array_parameters)
         {
-            if (null_checked_pinned_arrays.contains(pinned_parameter.managed_name))
+            if (null_checked_pinned_arrays.contains(pinned_parameter.parameter_name))
             {
                 continue;
             }
-            generated.append_line_format("        if ({} == null)", pinned_parameter.managed_name);
-            generated.append_line("        {");
-            generated.append_line_format(
-                "            throw new System.ArgumentNullException(nameof({}));", pinned_parameter.managed_name);
-            generated.append_line("        }");
+            append_pinned_array_validation(generated, "        ", pinned_parameter);
+            null_checked_pinned_arrays.insert(pinned_parameter.parameter_name);
         }
         if (!pinned_array_parameters.empty())
         {
@@ -4281,7 +4430,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     "            fixed ({}* {} = {})",
                     pinned_parameter.element_type,
                     pinned_parameter.pinned_name,
-                    pinned_parameter.managed_name);
+                    pinned_parameter.managed_expression);
                 generated.append_line("            {");
             }
         }

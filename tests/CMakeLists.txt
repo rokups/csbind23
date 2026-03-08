@@ -26,6 +26,11 @@ if (NOT E2E_MODULE_HEADERS)
 endif()
 
 foreach(module_header IN LISTS E2E_MODULE_HEADERS)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${module_header}" module_header_content)
+    if (module_header_content MATCHES "csbind23:[ 	]*helper-only")
+        continue()
+    endif()
+
     get_filename_component(module_dir "${module_header}" DIRECTORY)
     get_filename_component(module_basename "${module_header}" NAME_WE)
     string(REGEX REPLACE "^test_(.+)$" "\\1" test_name "${module_basename}")
