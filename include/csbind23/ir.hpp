@@ -97,13 +97,20 @@ struct TypeRef
     std::string c_abi_name;
     std::string pinvoke_name;
     std::string managed_type_name;
+    std::string managed_array_element_type_name;
     std::string managed_to_pinvoke_expression;
     std::string managed_from_pinvoke_expression;
     std::string managed_finalize_to_pinvoke_statement;
     std::string managed_finalize_from_pinvoke_statement;
+    std::size_t managed_array_fixed_extent = std::numeric_limits<std::size_t>::max();
     bool is_const = false;
     bool is_pointer = false;
     bool is_reference = false;
+
+    bool has_fixed_managed_array_extent() const
+    {
+        return managed_array_fixed_extent != std::numeric_limits<std::size_t>::max();
+    }
 
     bool has_managed_converter() const
     {

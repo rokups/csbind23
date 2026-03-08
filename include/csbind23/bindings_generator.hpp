@@ -5,6 +5,7 @@
 #include "csbind23/type_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +54,58 @@ struct CppSymbol
 {
     std::string_view value;
 };
+
+template <std::size_t Extent>
+struct FixedString
+{
+    char value[Extent];
+
+    constexpr FixedString(const char (&text)[Extent])
+        : value{}
+    {
+        for (std::size_t index = 0; index < Extent; ++index)
+        {
+            value[index] = text[index];
+        }
+    }
+
+    constexpr std::string_view view() const
+    {
+        return std::string_view(value, Extent - 1);
+    }
+};
+
+// Couples a generic resolver lambda with the uninstantiated C++ template symbol
+// it should map to.
+//
+// Use this with resolver-based `def_generic()` overloads when the resolver returns
+// a pointer to a function or method template specialization and the generator cannot
+// recover the original template base name directly from that specialization.
+//
+// Example:
+//   def_generic<csbind23::CppTemplateFactory{
+//       []<typename T, typename U>() { return &RefGenericOps::add_mixed<T, U>; },
+//       "add_mixed"},
+//       TemplateArgs<int, double>,
+//       TemplateArgs<double, int>>("add_mixed_generic");
+//
+// The factory keeps the symbol metadata attached to the resolver itself, which
+// avoids a separate option like `CppSymbolTemplate` appearing on unrelated APIs.
+template <typename Resolver, std::size_t Extent>
+struct CppTemplateFactory
+{
+    Resolver resolver;
+    FixedString<Extent> cpp_symbol_template;
+
+    template <typename... Types>
+    constexpr auto operator()() const
+    {
+        return resolver.template operator()<Types...>();
+    }
+};
+
+template <typename Resolver, std::size_t Extent>
+CppTemplateFactory(Resolver, const char (&)[Extent]) -> CppTemplateFactory<Resolver, Extent>;
 
 struct CppSymbols
 {
@@ -225,22 +278,9 @@ std::vector<std::string> template_spec_cpp_args()
     return args;
 }
 
-inline bool symbol_has_function_template_args(std::string_view symbol)
-{
-    const std::size_t last_scope = symbol.rfind("::");
-    const std::string_view trailing =
-        last_scope == std::string_view::npos ? symbol : symbol.substr(last_scope + 2);
-    return trailing.find('<') != std::string_view::npos;
-}
-
 template <typename Spec>
-std::string instantiate_symbol_from_spec(std::string base_symbol)
+std::string append_template_args_to_symbol(std::string base_symbol)
 {
-    if (base_symbol.empty() || symbol_has_function_template_args(base_symbol))
-    {
-        return base_symbol;
-    }
-
     const auto template_args = template_spec_cpp_args<Spec>();
     if (template_args.empty())
     {
@@ -258,6 +298,17 @@ std::string instantiate_symbol_from_spec(std::string base_symbol)
     }
     base_symbol += ">";
     return base_symbol;
+}
+
+template <auto Resolver>
+consteval std::string_view resolver_cpp_symbol_template()
+{
+    if constexpr (requires { Resolver.cpp_symbol_template.view(); })
+    {
+        return Resolver.cpp_symbol_template.view();
+    }
+
+    return {};
 }
 
 } // namespace detail
@@ -306,6 +357,34 @@ private:
         const EnumDecl* enum_decl = nullptr;
     };
 
+    template <typename Type>
+    struct FixedManagedArrayTraits
+    {
+        static constexpr bool is_fixed_array = false;
+    };
+
+    template <typename ElementType, std::size_t Extent>
+    struct FixedManagedArrayTraits<std::array<ElementType, Extent>>
+    {
+        using element_type = ElementType;
+        static constexpr bool is_fixed_array = true;
+        static constexpr std::size_t extent = Extent;
+    };
+
+    template <typename Type> static void assign_fixed_managed_array_metadata(TypeRef& type_ref)
+    {
+        using no_ref_type = std::remove_reference_t<Type>;
+        using no_ptr_type = std::remove_pointer_t<no_ref_type>;
+        using bare_type = std::remove_cv_t<no_ptr_type>;
+
+        if constexpr (FixedManagedArrayTraits<bare_type>::is_fixed_array)
+        {
+            using element_type = typename FixedManagedArrayTraits<bare_type>::element_type;
+            type_ref.managed_array_element_type_name = cabi::detail::managed_array_element_type_name<element_type>();
+            type_ref.managed_array_fixed_extent = FixedManagedArrayTraits<bare_type>::extent;
+        }
+    }
+
     template <typename Type> static void assign_managed_converter(TypeRef& type_ref, bool for_return_type)
     {
         type_ref.managed_type_name = for_return_type
@@ -319,6 +398,7 @@ private:
             std::string(cabi::detail::managed_finalize_to_pinvoke_statement_for<Type>());
         type_ref.managed_finalize_from_pinvoke_statement =
             std::string(cabi::detail::managed_finalize_from_pinvoke_statement_for<Type>());
+        assign_fixed_managed_array_metadata<Type>(type_ref);
     }
 
     static std::string csharp_namespace_name_for(const ModuleDecl& module_decl, const ClassDecl& class_decl)
@@ -1463,15 +1543,13 @@ public:
         const auto def_options = make_method_def_options(std::forward<Options>(options)...);
         constexpr auto first_method_ptr = detail::resolve_nontype_from_spec<MethodResolver, FirstSpec>();
         add_generic_method_instantiation_auto<first_method_ptr>(name, def_options,
-            resolve_generic_method_cpp_symbol<first_method_ptr, FirstSpec>(
-                def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, 0)));
+            resolve_generic_method_cpp_symbol<MethodResolver, first_method_ptr, FirstSpec>(def_options, 0));
 
         std::size_t index = 1;
         ([&] {
             constexpr auto method_ptr = detail::resolve_nontype_from_spec<MethodResolver, RestSpecs>();
             add_generic_method_instantiation_auto<method_ptr>(name, def_options,
-                resolve_generic_method_cpp_symbol<method_ptr, RestSpecs>(
-                    def_options, detail::generic_cpp_symbol_for(def_options.cpp_symbols, index++)));
+                resolve_generic_method_cpp_symbol<MethodResolver, method_ptr, RestSpecs>(def_options, index++));
         }(),
             ...);
         return *this;
@@ -1817,117 +1895,33 @@ private:
         const std::string cpp_symbol = !cpp_symbol_override.empty()
             ? std::string(cpp_symbol_override)
             : (def_options.cpp_symbol.empty()
-            ? infer_generic_method_cpp_symbol(std::string(detail::function_symbol_name<MethodPtr>()), MethodPtr)
+            ? detail::unqualified_name(detail::function_symbol_name<MethodPtr>())
             : std::string(def_options.cpp_symbol));
 
         add_generic_method_instantiation(name, MethodPtr, def_options, cpp_symbol);
     }
 
-    template <auto MethodPtr, typename Spec>
-    static std::string resolve_generic_method_cpp_symbol(
-        const MethodDefOptions& def_options, std::string_view cpp_symbol_override = {})
+    template <auto MethodResolver, auto MethodPtr, typename Spec>
+    static std::string resolve_generic_method_cpp_symbol(const MethodDefOptions& def_options, std::size_t index)
     {
-        if (!cpp_symbol_override.empty())
+        if (const std::string_view cpp_symbol_override = detail::generic_cpp_symbol_for(def_options.cpp_symbols, index);
+            !cpp_symbol_override.empty())
         {
             return std::string(cpp_symbol_override);
         }
 
+        if (const std::string_view cpp_symbol_template = detail::resolver_cpp_symbol_template<MethodResolver>();
+            !cpp_symbol_template.empty())
+        {
+            return detail::append_template_args_to_symbol<Spec>(std::string(cpp_symbol_template));
+        }
+
         if (!def_options.cpp_symbol.empty())
         {
-            return detail::instantiate_symbol_from_spec<Spec>(std::string(def_options.cpp_symbol));
+            return std::string(def_options.cpp_symbol);
         }
 
-        return detail::instantiate_symbol_from_spec<Spec>(std::string(detail::function_symbol_name<MethodPtr>()));
-    }
-
-    template <typename ClassType, typename ReturnType, typename... Args>
-    static std::string infer_generic_method_cpp_symbol(
-        std::string base_symbol, ReturnType (ClassType::*)(Args...))
-    {
-        if (base_symbol.empty() || base_symbol.find('<') != std::string::npos)
-        {
-            return base_symbol;
-        }
-
-        std::vector<std::string> template_args;
-        if constexpr (sizeof...(Args) == 0)
-        {
-            template_args.push_back(detail::cpp_type_name<ReturnType>());
-        }
-        else
-        {
-            const std::string return_type_name = detail::cpp_type_name<ReturnType>();
-            const std::string first_arg_type_name = detail::cpp_type_name<std::tuple_element_t<0, std::tuple<Args...>>>();
-            if (return_type_name != first_arg_type_name)
-            {
-                template_args.push_back(return_type_name);
-            }
-
-            (template_args.push_back(detail::cpp_type_name<Args>()), ...);
-        }
-
-        if (template_args.empty())
-        {
-            return base_symbol;
-        }
-
-        std::string rendered = std::move(base_symbol);
-        rendered += "<";
-        for (std::size_t index = 0; index < template_args.size(); ++index)
-        {
-            rendered += template_args[index];
-            if (index + 1 < template_args.size())
-            {
-                rendered += ", ";
-            }
-        }
-        rendered += ">";
-        return rendered;
-    }
-
-    template <typename ClassType, typename ReturnType, typename... Args>
-    static std::string infer_generic_method_cpp_symbol(
-        std::string base_symbol, ReturnType (ClassType::*)(Args...) const)
-    {
-        if (base_symbol.empty() || base_symbol.find('<') != std::string::npos)
-        {
-            return base_symbol;
-        }
-
-        std::vector<std::string> template_args;
-        if constexpr (sizeof...(Args) == 0)
-        {
-            template_args.push_back(detail::cpp_type_name<ReturnType>());
-        }
-        else
-        {
-            const std::string return_type_name = detail::cpp_type_name<ReturnType>();
-            const std::string first_arg_type_name = detail::cpp_type_name<std::tuple_element_t<0, std::tuple<Args...>>>();
-            if (return_type_name != first_arg_type_name)
-            {
-                template_args.push_back(return_type_name);
-            }
-
-            (template_args.push_back(detail::cpp_type_name<Args>()), ...);
-        }
-
-        if (template_args.empty())
-        {
-            return base_symbol;
-        }
-
-        std::string rendered = std::move(base_symbol);
-        rendered += "<";
-        for (std::size_t index = 0; index < template_args.size(); ++index)
-        {
-            rendered += template_args[index];
-            if (index + 1 < template_args.size())
-            {
-                rendered += ", ";
-            }
-        }
-        rendered += ">";
-        return rendered;
+        return detail::unqualified_name(detail::function_symbol_name<MethodPtr>());
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>

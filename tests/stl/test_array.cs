@@ -50,6 +50,49 @@ namespace CsBind23.Tests.E2E
         }
 
         [Fact]
+        public void Array_FloatByValue_UsesGenericArrayMarshalling()
+        {
+            var output = ArrayApi.array_scale(new[] { 1.5f, 2.0f, 4.0f }, 0.5f);
+            Assert.Equal(new[] { 0.75f, 1.0f, 2.0f }, output);
+        }
+
+        [Fact]
+        public void Array_ObjectByValue_UsesConverterBackedElements()
+        {
+            var value = new[]
+            {
+                new SequentialVec2(1.0f, 2.0f),
+                new SequentialVec2(3.0f, 4.0f),
+            };
+
+            var output = ArrayApi.array_shift_vec2(value, 0.5f);
+
+            Assert.Equal(
+                new[]
+                {
+                    new SequentialVec2(1.5f, 1.5f),
+                    new SequentialVec2(3.5f, 3.5f),
+                },
+                output);
+            Assert.Equal(10.0f, ArrayApi.array_sum_vec2(value));
+        }
+
+        [Fact]
+        public void Array_ObjectPointerArray_UsesManagedWrappers()
+        {
+            using var first = new ArrayItem(5);
+            using var second = new ArrayItem(7);
+            using var third = new ArrayItem(11);
+
+            Assert.Equal(23, ArrayApi.array_sum_item_pointers(new[] { first, second, third }));
+
+            var rotated = ArrayApi.array_rotate_item_pointers(new[] { first, second, third });
+            Assert.Equal(7, rotated[0].get());
+            Assert.Equal(11, rotated[1].get());
+            Assert.Equal(5, rotated[2].get());
+        }
+
+        [Fact]
         public void CArray_PointerOnly_UsesManagedArray()
         {
             var total = ArrayApi.array_sum_ptr_fixed4(new[] { 1, 3, 5, 7 });
@@ -69,6 +112,21 @@ namespace CsBind23.Tests.E2E
             var value = new[] { 10, 20, 30, 40 };
             ArrayApi.array_add_scalar_ptr_counted(value, 5);
             Assert.Equal(new[] { 15, 25, 35, 45 }, value);
+        }
+
+        [Fact]
+        public void CArray_FloatPointerWithSize_InfersCount()
+        {
+            var total = ArrayApi.array_sum_ptr_counted_float(new[] { 1.25f, 2.5f, 3.75f });
+            Assert.Equal(7.5f, total);
+        }
+
+        [Fact]
+        public void CArray_FloatPointerWithSize_MutableCopiesBack()
+        {
+            var value = new[] { 1.0f, 2.0f, 3.0f };
+            ArrayApi.array_add_scalar_ptr_counted_float(value, 0.25f);
+            Assert.Equal(new[] { 1.25f, 2.25f, 3.25f }, value);
         }
     }
 }

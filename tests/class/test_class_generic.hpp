@@ -211,7 +211,9 @@ inline void register_bindings_class_generic(BindingsGenerator& generator, std::s
     module.class_<class_generic::RefGenericOps>()
         .ctor<>()
         .def_generic<
-            []<typename T>() { return &class_generic::RefGenericOps::add_to_ref<T>; },
+            csbind23::CppTemplateFactory{
+                []<typename T>() { return &class_generic::RefGenericOps::add_to_ref<T>; },
+                "add_to_ref"},
             int,
             double>(
             "add_to_ref_generic")
@@ -227,7 +229,9 @@ inline void register_bindings_class_generic(BindingsGenerator& generator, std::s
             double>(
             "add_to_ptr_generic")
         .def_generic<
-            []<typename T, typename U>() { return &class_generic::RefGenericOps::add_mixed<T, U>; },
+            csbind23::CppTemplateFactory{
+                []<typename T, typename U>() { return &class_generic::RefGenericOps::add_mixed<T, U>; },
+                "add_mixed"},
             csbind23::TemplateArgs<int, double>,
             csbind23::TemplateArgs<double, int>>(
             "add_mixed_generic");
