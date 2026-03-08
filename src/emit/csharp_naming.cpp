@@ -104,6 +104,10 @@ std::string format_csharp_name(
 {
     if (!module_decl.csharp_name_formatter)
     {
+        if (kind == CSharpNameKind::Class)
+        {
+            return to_pascal_case(input);
+        }
         return std::string(input);
     }
 

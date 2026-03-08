@@ -1,5 +1,4 @@
-using CsBind23.Generated;
-using StdString = CsBind23.Generated.Std.String;
+using CsBind23.Tests.E2E.VirtualModule;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;
@@ -21,7 +20,7 @@ public class ManagedVirtualCounter : VirtualCounter
         return base.read() + 7;
     }
 
-    public override StdString describe()
+    public override Std.String describe()
     {
         return "ManagedVirtualCounter";
     }
@@ -34,7 +33,7 @@ public class ManagedPartialVirtualCounter : VirtualCounter
     {
     }
 
-    public override StdString describe()
+    public override Std.String describe()
     {
         return "ManagedPartialVirtualCounter";
     }

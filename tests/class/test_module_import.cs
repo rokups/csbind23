@@ -1,4 +1,5 @@
-using CsBind23.Generated;
+using CsBind23.Tests.E2E.ModuleImportAnimals;
+using CsBind23.Tests.E2E.ModuleImportConsumer;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;

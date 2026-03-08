@@ -34,6 +34,41 @@ constexpr std::string_view shared_support_namespace()
 }
 
 std::string csharp_namespace_name(const ModuleDecl& module_decl);
+
+std::string default_module_namespace_name(const ModuleDecl& module_decl)
+{
+    if (module_decl.name == stl_module_name())
+    {
+        return std::string(default_stl_csharp_namespace());
+    }
+
+    return make_safe_csharp_namespace_segment(format_csharp_name(module_decl, CSharpNameKind::Class, module_decl.name));
+}
+
+std::string native_class_name(const ModuleDecl& module_decl)
+{
+    return format_csharp_name(module_decl, CSharpNameKind::Class, module_decl.name + "Native");
+}
+
+std::string runtime_class_name(const ModuleDecl& module_decl)
+{
+    return format_csharp_name(module_decl, CSharpNameKind::Class, module_decl.name + "Runtime");
+}
+
+std::string qualified_runtime_class_name(const ModuleDecl& module_decl)
+{
+    return "global::" + csharp_namespace_name(module_decl) + "." + runtime_class_name(module_decl);
+}
+
+std::string wrap_polymorphic_method_name(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    return format_csharp_name(module_decl, CSharpNameKind::Class, "WrapPolymorphic_" + class_decl.name);
+}
+
+constexpr std::string_view pinvoke_library_constant_name()
+{
+    return "DllImportLibrary";
+}
 std::string wrapper_type_name(const TypeRef& type_ref);
 
 std::filesystem::path write_csharp_file(
@@ -1112,7 +1147,7 @@ std::string default_variant_condition(std::size_t omitted, const std::vector<std
     return condition.empty() ? "true" : condition;
 }
 
-void append_default_variant_if_chain(TextWriter& output, std::string_view indent, const std::string& module_name,
+void append_default_variant_if_chain(TextWriter& output, std::string_view indent, const std::string& native_class,
     const std::string& native_name, const std::vector<std::string>& call_arguments, std::size_t defaults,
     const std::vector<std::string>& has_value_expressions, std::string_view assign_target, bool emit_return)
 {
@@ -1123,7 +1158,7 @@ void append_default_variant_if_chain(TextWriter& output, std::string_view indent
         const std::string call_arguments_rendered = join_arguments(prefix_args);
         const std::string variant_name =
             omitted == 0 ? native_name : native_name + std::format("__default_{}", omitted);
-        const std::string variant_call = std::format("{}Native.{}({})", module_name, variant_name, call_arguments_rendered);
+        const std::string variant_call = std::format("{}.{}({})", native_class, variant_name, call_arguments_rendered);
         const std::string condition = default_variant_condition(omitted, has_value_expressions);
 
         if (omitted == 0)
@@ -1173,7 +1208,7 @@ std::string csharp_namespace_name(const ModuleDecl& module_decl)
     {
         return module_decl.csharp_namespace;
     }
-    return "CsBind23.Generated";
+    return default_module_namespace_name(module_decl);
 }
 
 std::string csharp_namespace_name(const ModuleDecl& module_decl, std::string_view relative_namespace)
@@ -1182,6 +1217,11 @@ std::string csharp_namespace_name(const ModuleDecl& module_decl, std::string_vie
     if (relative_namespace.empty())
     {
         return base_namespace;
+    }
+
+    if (base_namespace.empty())
+    {
+        return std::string(relative_namespace);
     }
 
     return std::format("{}.{}", base_namespace, relative_namespace);
@@ -2259,8 +2299,8 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
 
         const std::string call_arguments_rendered = join_arguments(call_arguments);
         const std::string native_call = call_arguments_rendered.empty()
-            ? std::format("{}Native.{}_{}_create()", module_decl.name, module_decl.name, class_decl->name)
-            : std::format("{}Native.{}_{}_create({})", module_decl.name, module_decl.name, class_decl->name,
+            ? std::format("{}.{}_{}_create()", native_class_name(module_decl), module_decl.name, class_decl->name)
+            : std::format("{}.{}_{}_create({})", native_class_name(module_decl), module_decl.name, class_decl->name,
                 call_arguments_rendered);
 
         if (finalize_statements.empty())
@@ -2511,9 +2551,9 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
 
         const std::string call_arguments_rendered = join_arguments(call_arguments);
         const std::string call = call_arguments_rendered.empty()
-            ? std::format("{}Native.{}_{}_{}(_cPtr.Handle)", module_decl.name, module_decl.name,
+            ? std::format("{}.{}_{}_{}(_cPtr.Handle)", native_class_name(module_decl), module_decl.name,
                 class_group.instantiations[inst_index]->name, exported_symbol_name(*instantiation))
-            : std::format("{}Native.{}_{}_{}(_cPtr.Handle, {})", module_decl.name, module_decl.name,
+            : std::format("{}.{}_{}_{}(_cPtr.Handle, {})", native_class_name(module_decl), module_decl.name,
                 class_group.instantiations[inst_index]->name, exported_symbol_name(*instantiation),
                 call_arguments_rendered);
 
@@ -2645,9 +2685,9 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                     {
                         output.append_line_format("            {}", post_assignment);
                     }
-                    output.append_line_format("            return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, {});",
-                        polymorphic_return_class.module_decl->name,
-                        polymorphic_return_class.class_decl->name,
+                    output.append_line_format("            return {}.{}(__csbind23_result_ptr, {});",
+                        qualified_runtime_class_name(*polymorphic_return_class.module_decl),
+                        wrap_polymorphic_method_name(*polymorphic_return_class.module_decl, *polymorphic_return_class.class_decl),
                         translate_item_ownership_expression(module_decl, *polymorphic_return_class.module_decl,
                             item_ownership_literal(module_decl, false)));
                 }
@@ -2660,9 +2700,9 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                     {
                         output.append_line_format("                {}", post_assignment);
                     }
-                    output.append_line_format("                return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, {});",
-                        polymorphic_return_class.module_decl->name,
-                        polymorphic_return_class.class_decl->name,
+                    output.append_line_format("                return {}.{}(__csbind23_result_ptr, {});",
+                        qualified_runtime_class_name(*polymorphic_return_class.module_decl),
+                        wrap_polymorphic_method_name(*polymorphic_return_class.module_decl, *polymorphic_return_class.class_decl),
                         translate_item_ownership_expression(module_decl, *polymorphic_return_class.module_decl,
                             item_ownership_literal(module_decl, false)));
                     output.append_line("            }");
@@ -2775,6 +2815,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
 
 void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_decl, const GenericClassGroup& class_group)
 {
+    const std::string native_class = native_class_name(module_decl);
     if (class_group.instantiations.empty())
     {
         return;
@@ -2893,7 +2934,7 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         output.append_line("            {");
         if (class_has_owned_ctor(*class_decl))
         {
-            output.append_line_format("                {}Native.{}_{}_destroy(handle);", module_decl.name, module_decl.name, class_decl->name);
+            output.append_line_format("                {}.{}_{}_destroy(handle);", native_class, module_decl.name, class_decl->name);
         }
         output.append_line("            }");
     }
@@ -3008,10 +3049,11 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
     const std::string& exported_name, bool include_self,
     std::size_t parameter_count = std::numeric_limits<std::size_t>::max())
 {
+    (void)pinvoke_library;
     output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport(\"{}\", CallingConvention = "
+        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = "
         "System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library);
+        pinvoke_library_constant_name());
     output.append_format("    internal static extern {} {}(", pinvoke_return_type(function_decl), exported_name);
 
     bool needs_separator = false;
@@ -3046,10 +3088,11 @@ void append_native_connect_signature(TextWriter& output, std::string_view pinvok
     const std::string& exported_name, const std::vector<const FunctionDecl*>& virtual_methods)
 {
     (void)virtual_methods;
+    (void)pinvoke_library;
     output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport(\"{}\", CallingConvention = "
+        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = "
         "System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library);
+        pinvoke_library_constant_name());
     output.append_line_format(
         "    internal static extern void {}(System.IntPtr self, System.IntPtr callbacks, nuint callbackCount);",
         exported_name);
@@ -3071,6 +3114,7 @@ bool class_has_owned_ctor(const ClassDecl& class_decl)
 void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
     const FunctionDecl& method_decl, bool is_virtual, bool is_override, std::size_t virtual_index)
 {
+    const std::string native_class = native_class_name(module_decl);
     const std::string managed_method = managed_method_name(module_decl, method_decl);
     const std::string parameter_list = parameter_list_without_self(method_decl);
     const std::string native_name =
@@ -3173,11 +3217,11 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
 
     const std::string call_arguments_rendered = join_arguments(call_arguments);
     const std::string native_call = call_arguments_rendered.empty()
-        ? std::format("{}Native.{}(_cPtr.Handle)", module_name, native_name)
-        : std::format("{}Native.{}(_cPtr.Handle, {})", module_name, native_name, call_arguments_rendered);
+        ? std::format("{}.{}(_cPtr.Handle)", native_class, native_name)
+        : std::format("{}.{}(_cPtr.Handle, {})", native_class, native_name, call_arguments_rendered);
     const std::string base_native_call = call_arguments_rendered.empty()
-        ? std::format("{}Native.{}(_cPtr.Handle)", module_name, base_native_name)
-        : std::format("{}Native.{}(_cPtr.Handle, {})", module_name, base_native_name, call_arguments_rendered);
+        ? std::format("{}.{}(_cPtr.Handle)", native_class, base_native_name)
+        : std::format("{}.{}(_cPtr.Handle, {})", native_class, base_native_name, call_arguments_rendered);
 
     const std::string dispatch_native_call = is_virtual
         ? std::format("({} ? {} : {})", virtual_mask_test_expression("", virtual_index), base_native_call, native_call)
@@ -3241,9 +3285,9 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
     {
         const std::string native_result_name = "__csbind23_result_ptr";
         const std::string wrapped_result = std::format(
-            "{}Runtime.WrapPolymorphic_{}({}, {})",
-            polymorphic_return_class.module_decl->name,
-            polymorphic_return_class.class_decl->name,
+            "{}.{}({}, {})",
+            qualified_runtime_class_name(*polymorphic_return_class.module_decl),
+            wrap_polymorphic_method_name(*polymorphic_return_class.module_decl, *polymorphic_return_class.class_decl),
             native_result_name,
             translate_item_ownership_expression(
                 module_decl, *polymorphic_return_class.module_decl, item_ownership_literal(module_decl, false)));
@@ -3357,6 +3401,7 @@ void append_instance_cache_support(TextWriter& output, const ModuleDecl& module_
 void append_virtual_director_support(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl,
     const std::vector<const FunctionDecl*>& virtual_methods)
 {
+    const std::string native_class = native_class_name(module_decl);
     const std::string managed_class = managed_class_name(module_decl, class_decl);
 
     const std::size_t mask_field_count = (virtual_methods.size() + 63) / 64;
@@ -3457,8 +3502,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
     output.append_line("            fixed (System.IntPtr* __csbind23_callbacksPtr = __csbind23_callbacks)");
     output.append_line("            {");
     output.append_line_format(
-        "                {}Native.{}_{}_connect_director(_cPtr.Handle, (System.IntPtr)__csbind23_callbacksPtr, (nuint){});",
-        module_name,
+        "                {}.{}_{}_connect_director(_cPtr.Handle, (System.IntPtr)__csbind23_callbacksPtr, (nuint){});",
+        native_class,
         module_name,
         class_decl.name,
         virtual_methods.size());
@@ -3501,8 +3546,8 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         }
         const std::string base_call_arguments_rendered = join_arguments(base_call_arguments);
         const std::string base_native_call = std::format(
-            "{}Native.{}_{}__base({})",
-            module_name,
+            "{}.{}_{}__base({})",
+            native_class,
             module_name,
             class_decl.name + "_" + method_decl.name,
             base_call_arguments_rendered);
@@ -3585,6 +3630,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
 void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all_modules,
     const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl)
 {
+    const std::string native_class = native_class_name(module_decl);
     const std::string managed_class = managed_class_name(module_decl, class_decl);
     const ClassBinding base_class = primary_base_class(all_modules, module_decl, class_decl);
     const bool has_base_class = base_class.class_decl != nullptr;
@@ -3740,8 +3786,8 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
         const std::string converted_arguments_rendered = join_arguments(converted_arguments);
         const std::string native_call = converted_arguments_rendered.empty()
-            ? std::format("{}Native.{}()", module_name, create_name)
-            : std::format("{}Native.{}({})", module_name, create_name, converted_arguments_rendered);
+            ? std::format("{}.{}()", native_class, create_name)
+            : std::format("{}.{}({})", native_class, create_name, converted_arguments_rendered);
 
         if (!pinned_array_parameters.empty())
         {
@@ -3824,7 +3870,7 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
         if (has_virtual_support)
         {
-            output.append_line_format("        {}Native.{}_{}_disconnect_director(handle);", module_name, module_name, class_decl.name);
+            output.append_line_format("        {}.{}_{}_disconnect_director(handle);", native_class, module_name, class_decl.name);
         }
 
         output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
@@ -3835,7 +3881,7 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
         if (emits_destroy)
         {
             output.append_line_format(
-                "            {}Native.{}_{}_destroy(handle);", module_name, module_name, class_decl.name);
+                "            {}.{}_{}_destroy(handle);", native_class, module_name, class_decl.name);
         }
         output.append_line("        }");
         output.append_line("    }");
@@ -4008,8 +4054,10 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     generated.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     generated.append_line();
-    generated.append_line_format("internal static class {}Native", module_decl.name);
+    generated.append_line_format("internal static class {}", native_class_name(module_decl));
     generated.append_line("{");
+    generated.append_line_format("    internal const string {} = \"{}\";", pinvoke_library_constant_name(), module_decl.pinvoke_library);
+    generated.append_line();
 
     for (const auto& function_decl : module_decl.functions)
     {
@@ -4125,7 +4173,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     if (!module_decl.classes.empty())
     {
-        generated.append_line_format("internal static class {}Runtime", module_decl.name);
+        generated.append_line_format("internal static class {}", runtime_class_name(module_decl));
         generated.append_line("{");
         generated.append_line_format(
             "    private static readonly System.Func<System.IntPtr, {}, object>[] __csbind23_typeFactories =",
@@ -4151,7 +4199,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
         {
             const auto assignable_classes = polymorphic_assignable_classes(all_modules, class_decl.cpp_name);
             generated.append_line_format(
-                "    internal static object WrapPolymorphic_{}(System.IntPtr handle, {} ownership)", class_decl.name,
+                "    internal static object {}(System.IntPtr handle, {} ownership)",
+                wrap_polymorphic_method_name(module_decl, class_decl),
                 item_ownership_type_name(module_decl));
             generated.append_line("    {");
             generated.append_line("        if (handle == System.IntPtr.Zero)");
@@ -4160,8 +4209,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
             generated.append_line("        }");
             generated.append_line();
             generated.append_line_format(
-                "        int dynamicTypeId = {}Native.{}_{}_dynamic_type_id(handle);",
-                module_decl.name,
+                "        int dynamicTypeId = {}.{}_{}_dynamic_type_id(handle);",
+                native_class_name(module_decl),
                 module_decl.name,
                 class_decl.name);
             generated.append_line("        switch (dynamicTypeId)");
@@ -4172,8 +4221,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 generated.append_line_format("        case {}:", index);
                 generated.append_line("        {");
                 generated.append_line_format(
-                    "            System.IntPtr adjustedHandle = {}Native.{}_{}_cast(handle, {});",
-                    module_decl.name,
+                    "            System.IntPtr adjustedHandle = {}.{}_{}_cast(handle, {});",
+                    native_class_name(module_decl),
                     module_decl.name,
                     class_decl.name,
                     index);
@@ -4345,7 +4394,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         if (defaults == 0)
         {
             const std::string call_arguments_rendered = join_arguments(call_arguments);
-            native_call = std::format("{}Native.{}({})", module_decl.name, native_name, call_arguments_rendered);
+            native_call = std::format("{}.{}({})", native_class_name(module_decl), native_name, call_arguments_rendered);
         }
         else
         {
@@ -4395,7 +4444,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 }
                 else
                 {
-                    append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                    append_default_variant_if_chain(generated, "        ", native_class_name(module_decl), native_name,
                         call_arguments, defaults, default_variant_has_value_expressions, "", false);
                 }
             }
@@ -4409,7 +4458,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                 }
                 else
                 {
-                    append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                    append_default_variant_if_chain(generated, "            ", native_class_name(module_decl), native_name,
                         call_arguments, defaults, default_variant_has_value_expressions, "", false);
                 }
                 generated.append_line("        }");
@@ -4428,9 +4477,9 @@ std::vector<std::filesystem::path> emit_csharp_module(
             {
                 const std::string native_result_name = "__csbind23_result_ptr";
                 const std::string wrapped_result = std::format(
-                    "{}Runtime.WrapPolymorphic_{}({}, {})",
-                    polymorphic_return_class.module_decl->name,
-                    polymorphic_return_class.class_decl->name,
+                    "{}.{}({}, {})",
+                    qualified_runtime_class_name(*polymorphic_return_class.module_decl),
+                    wrap_polymorphic_method_name(*polymorphic_return_class.module_decl, *polymorphic_return_class.class_decl),
                     native_result_name,
                     translate_item_ownership_expression(
                         module_decl, *polymorphic_return_class.module_decl, item_ownership_literal(module_decl, false)));
@@ -4444,7 +4493,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     else
                     {
                         generated.append_line_format("        System.IntPtr {} = default!;", native_result_name);
-                        append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                        append_default_variant_if_chain(generated, "        ", native_class_name(module_decl), native_name,
                             call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
                     }
                     generated.append_line_format("        return {};", wrapped_result);
@@ -4460,7 +4509,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     else
                     {
                         generated.append_line_format("            System.IntPtr {} = default!;", native_result_name);
-                        append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                        append_default_variant_if_chain(generated, "            ", native_class_name(module_decl), native_name,
                             call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
                     }
                     generated.append_line_format("            return {};", wrapped_result);
@@ -4484,7 +4533,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     }
                     else
                     {
-                        append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                        append_default_variant_if_chain(generated, "        ", native_class_name(module_decl), native_name,
                             call_arguments, defaults, default_variant_has_value_expressions, "", true);
                     }
                 }
@@ -4498,7 +4547,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     }
                     else
                     {
-                        append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                        append_default_variant_if_chain(generated, "            ", native_class_name(module_decl), native_name,
                             call_arguments, defaults, default_variant_has_value_expressions, "", true);
                     }
                     generated.append_line("        }");
@@ -4530,7 +4579,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     {
                         generated.append_line_format(
                             "        {} {} = default!;", function_decl.return_type.pinvoke_name, native_result_name);
-                        append_default_variant_if_chain(generated, "        ", module_decl.name, native_name,
+                        append_default_variant_if_chain(generated, "        ", native_class_name(module_decl), native_name,
                             call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
                     }
                     append_embedded_assignment(
@@ -4553,7 +4602,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     }
                     else
                     {
-                        append_default_variant_if_chain(generated, "            ", module_decl.name, native_name,
+                        append_default_variant_if_chain(generated, "            ", native_class_name(module_decl), native_name,
                             call_arguments, defaults, default_variant_has_value_expressions, native_result_name, false);
                     }
                     append_embedded_assignment(

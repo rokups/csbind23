@@ -915,7 +915,6 @@ inline ClassBuilder add_string(BindingsGenerator& generator)
     auto module = detail::ensure_stl_module(generator);
 
     auto builder = module.class_<std::string>("String", CppName{"std::string"});
-    builder.csharp_namespace("Std");
     builder.csharp_interface("System.Collections.Generic.IEnumerable<char>");
     builder.csharp_interface("System.Collections.IEnumerable");
     builder.ctor<>();

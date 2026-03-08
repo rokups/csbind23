@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using CsBind23.Generated;
+using CsBind23.Tests.E2E.InstanceCache;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;
@@ -14,7 +15,7 @@ public sealed class NativeGcHandleInstanceCache<T> : IInstanceCache<T>
             return;
         }
 
-        var existing = instance_cacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(handle);
+        var existing = InstanceCacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(handle);
         if (existing != System.IntPtr.Zero)
         {
             var previous = GCHandle.FromIntPtr(existing);
@@ -25,7 +26,7 @@ public sealed class NativeGcHandleInstanceCache<T> : IInstanceCache<T>
         }
 
         var gcHandle = GCHandle.Alloc(instance, GCHandleType.Weak);
-        instance_cacheNative.instance_cache_NativeHandleBackedCounter_set_managed_handle(
+        InstanceCacheNative.instance_cache_NativeHandleBackedCounter_set_managed_handle(
             handle,
             GCHandle.ToIntPtr(gcHandle));
     }
@@ -37,7 +38,7 @@ public sealed class NativeGcHandleInstanceCache<T> : IInstanceCache<T>
             return;
         }
 
-        var value = instance_cacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(handle);
+        var value = InstanceCacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(handle);
         if (value == System.IntPtr.Zero)
         {
             return;
@@ -48,7 +49,7 @@ public sealed class NativeGcHandleInstanceCache<T> : IInstanceCache<T>
         {
             gcHandle.Free();
         }
-        instance_cacheNative.instance_cache_NativeHandleBackedCounter_set_managed_handle(handle, System.IntPtr.Zero);
+        InstanceCacheNative.instance_cache_NativeHandleBackedCounter_set_managed_handle(handle, System.IntPtr.Zero);
     }
 
     public bool TryGet(System.IntPtr handle, out T instance)
@@ -59,7 +60,7 @@ public sealed class NativeGcHandleInstanceCache<T> : IInstanceCache<T>
             return false;
         }
 
-        var value = instance_cacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(handle);
+        var value = InstanceCacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(handle);
         if (value == System.IntPtr.Zero)
         {
             return false;
@@ -105,7 +106,7 @@ public class InstanceCacheTests
 
         Assert.NotEqual(
             System.IntPtr.Zero,
-            instance_cacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(counter.RawHandle));
+            InstanceCacheNative.instance_cache_NativeHandleBackedCounter_get_managed_handle(counter.RawHandle));
         Assert.Equal(1013, counter.add_through_native(3));
     }
 }

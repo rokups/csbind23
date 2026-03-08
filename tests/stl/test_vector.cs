@@ -1,7 +1,8 @@
 using System.Collections;
 using System.Collections.Generic;
 using CsBind23.Generated;
-using CsBind23.Generated.Std;
+using Std;
+using CsBind23.Tests.E2E.Vector;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;

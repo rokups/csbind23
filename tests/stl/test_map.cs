@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using CsBind23.Generated;
-using CsBind23.Generated.Std;
-using StdString = CsBind23.Generated.Std.String;
+using CsBind23.Tests.E2E.Map;
+using Std;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;
@@ -74,7 +74,7 @@ public class MapTests
     [Fact]
     public void Map_String_Key_And_Class_Value_Work()
     {
-        using var counts = new Map<StdString, int>();
+        using var counts = new Map<Std.String, int>();
         counts.Add("one", 1);
         counts["two"] = 2;
 

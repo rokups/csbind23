@@ -1,5 +1,6 @@
 #pragma once
 
+#include "csbind23/emit/csharp_naming.hpp"
 #include "csbind23/ir.hpp"
 #include "csbind23/type_utils.hpp"
 
@@ -317,11 +318,15 @@ private:
 
     static std::string csharp_namespace_name_for(const ModuleDecl& module_decl, const ClassDecl& class_decl)
     {
-        const std::string base_namespace =
-            module_decl.csharp_namespace.empty() ? std::string("CsBind23.Generated") : module_decl.csharp_namespace;
+        const std::string base_namespace = csharp_namespace_name_for(module_decl);
         if (class_decl.csharp_namespace.empty())
         {
             return base_namespace;
+        }
+
+        if (base_namespace.empty())
+        {
+            return class_decl.csharp_namespace;
         }
 
         return base_namespace + "." + class_decl.csharp_namespace;
@@ -329,29 +334,28 @@ private:
 
     static std::string csharp_namespace_name_for(const ModuleDecl& module_decl)
     {
-        return module_decl.csharp_namespace.empty() ? std::string("CsBind23.Generated") : module_decl.csharp_namespace;
+        if (!module_decl.csharp_namespace.empty())
+        {
+            return module_decl.csharp_namespace;
+        }
+
+        if (module_decl.name == stl_module_name())
+        {
+            return std::string(default_stl_csharp_namespace());
+        }
+
+        return make_safe_csharp_namespace_segment(
+            emit::format_csharp_name(module_decl, CSharpNameKind::Class, module_decl.name));
     }
 
     static std::string managed_class_name_for(const ModuleDecl& module_decl, const ClassDecl& class_decl)
     {
-        if (!module_decl.csharp_name_formatter)
-        {
-            return class_decl.name;
-        }
-
-        const std::string formatted = module_decl.csharp_name_formatter(CSharpNameKind::Class, class_decl.name);
-        return formatted.empty() ? class_decl.name : formatted;
+        return emit::format_csharp_name(module_decl, CSharpNameKind::Class, class_decl.name);
     }
 
     static std::string managed_enum_name_for(const ModuleDecl& module_decl, const EnumDecl& enum_decl)
     {
-        if (!module_decl.csharp_name_formatter)
-        {
-            return enum_decl.name;
-        }
-
-        const std::string formatted = module_decl.csharp_name_formatter(CSharpNameKind::Class, enum_decl.name);
-        return formatted.empty() ? enum_decl.name : formatted;
+        return emit::format_csharp_name(module_decl, CSharpNameKind::Class, enum_decl.name);
     }
 
     const ModuleDecl* find_module(std::string_view name) const
@@ -712,16 +716,65 @@ private:
         const std::string qualified_managed_class = "global::" + csharp_namespace + "." + managed_class;
         const std::string ownership_type = "global::CsBind23.Generated.ItemOwnership";
         const std::string ownership_literal = ownership_type + (!type_ref.is_reference && !type_ref.is_pointer ? ".Owned" : ".Borrowed");
+        const std::string runtime_class =
+            emit::format_csharp_name(*match.module_decl, CSharpNameKind::Class, match.module_decl->name + "Runtime");
+        const std::string wrap_method = emit::format_csharp_name(
+            *match.module_decl, CSharpNameKind::Class, "WrapPolymorphic_" + match.class_decl->name);
 
         type_ref.managed_type_name = qualified_managed_class;
         type_ref.managed_to_pinvoke_expression = "({value} is null ? System.IntPtr.Zero : {value}._cPtr.Handle)";
         type_ref.managed_from_pinvoke_expression = std::format(
-            "({})global::{}.{}Runtime.WrapPolymorphic_{}({{value}}, {})",
+            "({})global::{}.{}.{}({{value}}, {})",
             qualified_managed_class,
             csharp_namespace,
-            match.module_decl->name,
-            match.class_decl->name,
+            runtime_class,
+            wrap_method,
             ownership_literal);
+    }
+
+    void retarget_bound_class_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
+    {
+        if (!type_ref.has_managed_converter() || type_ref.managed_type_name.empty())
+        {
+            return;
+        }
+
+        const auto match = find_visible_bound_class(current_module, type_ref.cpp_name);
+        if (match.module_decl == nullptr || match.class_decl == nullptr)
+        {
+            return;
+        }
+
+        const std::string qualified_managed_class =
+            "global::" + csharp_namespace_name_for(*match.module_decl, *match.class_decl) + "."
+            + managed_class_name_for(*match.module_decl, *match.class_decl);
+        const std::string legacy_namespace = match.module_decl->name == stl_module_name()
+            ? std::string(default_stl_csharp_namespace())
+            : make_safe_csharp_namespace_segment(
+                emit::format_csharp_name(*match.module_decl, CSharpNameKind::Class, match.module_decl->name));
+        const std::string prior_managed_type_name = type_ref.managed_type_name;
+        const std::string legacy_runtime_name = "global::" + legacy_namespace + "."
+            + emit::format_csharp_name(*match.module_decl, CSharpNameKind::Class, match.module_decl->name + "Runtime");
+        const std::string qualified_runtime_name = "global::" + csharp_namespace_name_for(*match.module_decl) + "."
+            + emit::format_csharp_name(*match.module_decl, CSharpNameKind::Class, match.module_decl->name + "Runtime");
+
+        type_ref.managed_type_name = qualified_managed_class;
+        type_ref.managed_to_pinvoke_expression =
+            replace_all(type_ref.managed_to_pinvoke_expression, prior_managed_type_name, qualified_managed_class);
+        type_ref.managed_to_pinvoke_expression =
+            replace_all(type_ref.managed_to_pinvoke_expression, legacy_runtime_name, qualified_runtime_name);
+        type_ref.managed_from_pinvoke_expression =
+            replace_all(type_ref.managed_from_pinvoke_expression, prior_managed_type_name, qualified_managed_class);
+        type_ref.managed_from_pinvoke_expression =
+            replace_all(type_ref.managed_from_pinvoke_expression, legacy_runtime_name, qualified_runtime_name);
+        type_ref.managed_finalize_to_pinvoke_statement = replace_all(
+            type_ref.managed_finalize_to_pinvoke_statement, prior_managed_type_name, qualified_managed_class);
+        type_ref.managed_finalize_to_pinvoke_statement = replace_all(
+            type_ref.managed_finalize_to_pinvoke_statement, legacy_runtime_name, qualified_runtime_name);
+        type_ref.managed_finalize_from_pinvoke_statement = replace_all(
+            type_ref.managed_finalize_from_pinvoke_statement, prior_managed_type_name, qualified_managed_class);
+        type_ref.managed_finalize_from_pinvoke_statement = replace_all(
+            type_ref.managed_finalize_from_pinvoke_statement, legacy_runtime_name, qualified_runtime_name);
     }
 
     void assign_bound_enum_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
@@ -748,6 +801,8 @@ private:
         {
             assign_bound_std_string_managed_converter(type_ref, current_module);
         }
+
+        retarget_bound_class_managed_converter(type_ref, current_module);
 
         if (!type_ref.has_managed_converter())
         {

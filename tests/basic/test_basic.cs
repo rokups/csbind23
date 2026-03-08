@@ -1,4 +1,4 @@
-using CsBind23.Generated;
+using CsBind23.Tests.E2E.Basic;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;

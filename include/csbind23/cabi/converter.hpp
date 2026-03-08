@@ -331,7 +331,7 @@ template <> struct Converter<std::string_view>
     static constexpr std::string_view c_abi_param_type_name() { return "const char*"; }
     static constexpr std::string_view c_abi_return_type_name() { return "csbind23::cabi::StringView"; }
     static constexpr std::string_view pinvoke_param_type_name() { return "System.IntPtr"; }
-    static constexpr std::string_view pinvoke_return_type_name() { return "CsBind23StringView"; }
+    static constexpr std::string_view pinvoke_return_type_name() { return "global::CsBind23.Generated.CsBind23StringView"; }
     static constexpr std::string_view managed_type_name() { return "string"; }
     static constexpr std::string_view managed_to_pinvoke_expression()
     {

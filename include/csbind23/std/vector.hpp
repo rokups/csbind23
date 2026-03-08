@@ -421,7 +421,6 @@ GenericClassBuilder<std::vector<Types>...> add_vector(BindingsGenerator& generat
 
     auto builder = module.class_generic<std::vector, Types...>("Vector");
     builder.template ctor<>();
-    builder.csharp_namespace("Std");
     builder.csharp_interface("System.Collections.Generic.IList<T>");
     builder.csharp_interface("System.Collections.Generic.IReadOnlyList<T>");
     builder.template def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", Private{});

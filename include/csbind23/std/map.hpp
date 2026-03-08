@@ -691,7 +691,6 @@ detail::associative_map_builder_t<Specs...> add_map(BindingsGenerator& generator
 
     auto builder = module.class_generic<std::map, Specs...>("Map");
     builder.template ctor<>();
-    builder.csharp_namespace("Std");
     builder.csharp_interface("System.Collections.Generic.IDictionary<T0, T1>");
     builder.csharp_interface("System.Collections.Generic.IReadOnlyDictionary<T0, T1>");
     builder.template def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", Private{});
@@ -742,7 +741,6 @@ detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(Bindings
 
     auto builder = module.class_generic<std::unordered_map, Specs...>("UnorderedMap");
     builder.template ctor<>();
-    builder.csharp_namespace("Std");
     builder.csharp_interface("System.Collections.Generic.IDictionary<T0, T1>");
     builder.csharp_interface("System.Collections.Generic.IReadOnlyDictionary<T0, T1>");
     builder.template def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", Private{});

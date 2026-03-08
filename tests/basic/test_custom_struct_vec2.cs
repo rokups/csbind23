@@ -1,7 +1,7 @@
 using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using CsBind23.Generated;
+using CsBind23.Tests.E2E.CustomStructVec2;
 using Xunit;
 
 namespace CsBind23.Tests.E2E;
@@ -86,7 +86,9 @@ public class CustomStructVec2Tests
     [Fact]
     public void GeneratedNativeSignature_UsesPointerLikeInputs_AndValueReturns()
     {
-        Type nativeType = typeof(CustomStructVec2Api).Assembly.GetType("CsBind23.Generated.custom_struct_vec2Native", throwOnError: true)!;
+        Type nativeType = typeof(CustomStructVec2Api).Assembly.GetType(
+            $"{typeof(CustomStructVec2Api).Namespace}.CustomStructVec2Native",
+            throwOnError: true)!;
 
         MethodInfo makeVec2 = nativeType.GetMethod("custom_struct_vec2_make_vec2", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!;
         Assert.Equal(typeof(SequentialVec2), makeVec2.ReturnType);
