@@ -44,6 +44,11 @@ struct Private
 {
 };
 
+struct ExportName
+{
+    std::string_view value;
+};
+
 struct CppSymbol
 {
     std::string_view value;
@@ -1334,7 +1339,7 @@ public:
     {
         if constexpr (std::is_member_function_pointer_v<decltype(MethodPtr)>)
         {
-            return def(name, MethodPtr, std::forward<Options>(options)...);
+            return def(name, MethodPtr, CppSymbol{detail::unqualified_name(detail::function_symbol_name<MethodPtr>())}, std::forward<Options>(options)...);
         }
         else
         {
@@ -1374,7 +1379,7 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.cpp_symbol, def_options.exported_name, def_options.csharp_attributes, def_options.csharp_comment,
             def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
         return *this;
     }
@@ -1391,7 +1396,7 @@ public:
         }
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.cpp_symbol, def_options.exported_name, def_options.csharp_attributes, def_options.csharp_comment,
             def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
         return *this;
     }
@@ -1403,7 +1408,7 @@ public:
         const auto def_options = make_method_def_options(std::forward<Options>(options)...);
         add_method<ClassType, ReturnType, Args...>(name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, false, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.cpp_symbol, def_options.exported_name, def_options.csharp_attributes, def_options.csharp_comment,
             def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, true);
         return *this;
     }
@@ -1416,7 +1421,7 @@ public:
         const auto def_options = make_method_def_options(std::forward<Options>(options)...);
         add_method<ClassType, ReturnType, Args...>(name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, false, false, false,
-            def_options.cpp_symbol, def_options.csharp_attributes, def_options.csharp_comment,
+            def_options.cpp_symbol, def_options.exported_name, def_options.csharp_attributes, def_options.csharp_comment,
             def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, true);
         return *this;
     }
@@ -1666,6 +1671,7 @@ private:
         std::size_t trailing_default_argument_count = 0;
         bool allow_override = false;
         bool pinvoke_only = false;
+        std::string exported_name;
         std::string_view cpp_symbol = {};
         std::vector<std::string> cpp_symbols;
         std::vector<std::string> csharp_attributes;
@@ -1710,6 +1716,11 @@ private:
         options.csharp_private = true;
     }
 
+    static void apply_method_def_option(MethodDefOptions& options, ExportName export_name)
+    {
+        options.exported_name = std::string(export_name.value);
+    }
+
     static void apply_method_def_option(MethodDefOptions& options, CppSymbol cpp_symbol)
     {
         options.cpp_symbol = cpp_symbol.value;
@@ -1738,13 +1749,29 @@ private:
     template <typename Option> static void apply_method_def_option(MethodDefOptions&, Option&&)
     {
         static_assert(dependent_false<std::decay_t<Option>>::value,
-            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, PInvoke, Private, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
+            "Unsupported ClassBuilder::def option. Supported tags: Ownership, WithDefaults, Virtual, PInvoke, Private, ExportName, CppSymbol, CppSymbols, Attribute, Comment, Arg.");
+    }
+
+    template <typename ClassType, typename ReturnType, typename... Args>
+    void add_method(std::string_view name, bool is_const, Ownership return_ownership,
+        std::size_t trailing_default_argument_count, bool allow_override,
+        bool is_property_getter, bool is_property_setter, std::string_view cpp_symbol,
+        std::vector<std::string> csharp_attributes, std::string csharp_comment,
+        std::vector<Arg> arg_options,
+        bool is_field_accessor, bool pinvoke_only = false, bool csharp_private = false,
+        bool is_extension_method = false)
+    {
+        add_method<ClassType, ReturnType, Args...>(name, is_const, return_ownership,
+            trailing_default_argument_count, allow_override, is_property_getter, is_property_setter, cpp_symbol,
+            {}, std::move(csharp_attributes), std::move(csharp_comment), std::move(arg_options),
+            is_field_accessor, pinvoke_only, csharp_private, is_extension_method);
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
     void add_method(std::string_view name, bool is_const, Ownership return_ownership,
         std::size_t trailing_default_argument_count = 0, bool allow_override = false,
         bool is_property_getter = false, bool is_property_setter = false, std::string_view cpp_symbol = {},
+        std::string exported_name = {},
         std::vector<std::string> csharp_attributes = {}, std::string csharp_comment = {},
         std::vector<Arg> arg_options = {},
         bool is_field_accessor = false, bool pinvoke_only = false, bool csharp_private = false,
@@ -1752,7 +1779,7 @@ private:
     {
         FunctionDecl method_decl;
         method_decl.name = std::string(name);
-        method_decl.exported_name = std::string(name);
+        method_decl.exported_name = exported_name.empty() ? std::string(name) : std::move(exported_name);
         method_decl.cpp_symbol = cpp_symbol.empty() ? std::string(name) : std::string(cpp_symbol);
         method_decl.return_type = owner_->make_bound_return_type_ref<ReturnType>(module_decl_);
         method_decl.return_ownership = return_ownership;
@@ -1915,16 +1942,16 @@ private:
 
         const std::string group_name(name);
         const std::string unique_suffix = detail::generic_instantiation_suffix(class_decl_->methods.size());
-        const std::string managed_name = group_name + unique_suffix;
+        const std::string unique_export_name = (def_options.exported_name.empty() ? group_name : def_options.exported_name) + unique_suffix;
 
-        add_method<ClassType, ReturnType, Args...>(managed_name, false, def_options.return_ownership,
+        add_method<ClassType, ReturnType, Args...>(group_name, false, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
+            cpp_symbol_override, unique_export_name,
+            def_options.csharp_attributes, def_options.csharp_comment,
             def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
-        inserted.exported_name = inserted.name;
     }
 
     template <typename ClassType, typename ReturnType, typename... Args>
@@ -1939,16 +1966,16 @@ private:
 
         const std::string group_name(name);
         const std::string unique_suffix = detail::generic_instantiation_suffix(class_decl_->methods.size());
-        const std::string managed_name = group_name + unique_suffix;
+        const std::string unique_export_name = (def_options.exported_name.empty() ? group_name : def_options.exported_name) + unique_suffix;
 
-        add_method<ClassType, ReturnType, Args...>(managed_name, true, def_options.return_ownership,
+        add_method<ClassType, ReturnType, Args...>(group_name, true, def_options.return_ownership,
             def_options.trailing_default_argument_count, def_options.allow_override, false, false,
-            cpp_symbol_override, def_options.csharp_attributes, def_options.csharp_comment,
+            cpp_symbol_override, unique_export_name,
+            def_options.csharp_attributes, def_options.csharp_comment,
             def_options.arg_options, false, def_options.pinvoke_only, def_options.csharp_private, false);
 
         FunctionDecl& inserted = class_decl_->methods.back();
         detail::mark_generic_instantiation(inserted, group_name);
-        inserted.exported_name = inserted.name;
     }
 
     BindingsGenerator* owner_;
@@ -2054,6 +2081,7 @@ public:
             std::apply(
                 [&]<typename... OptionTypes>(const OptionTypes&... unpacked_options) {
                     std::string selected_cpp_symbol;
+                    std::string selected_export_name;
                     ([&] {
                         using OptionType = std::decay_t<OptionTypes>;
                         if constexpr (std::is_same_v<OptionType, CppSymbols>)
@@ -2064,17 +2092,26 @@ public:
                                 selected_cpp_symbol = std::string(symbol);
                             }
                         }
+                        else if constexpr (std::is_same_v<OptionType, ExportName>)
+                        {
+                            selected_export_name = std::string(unpacked_options.value);
+                        }
                     }(),
                         ...);
 
+                    if (selected_export_name.empty())
+                    {
+                        selected_export_name = std::string(name);
+                    }
+
                     if (selected_cpp_symbol.empty())
                     {
-                        class_builder.template def<MethodPtr>(name, unpacked_options...);
+                        class_builder.template def<MethodPtr>(name, ExportName{selected_export_name}, unpacked_options...);
                     }
                     else
                     {
                         class_builder.template def<MethodPtr>(
-                            name, CppSymbol{selected_cpp_symbol}, unpacked_options...);
+                            name, CppSymbol{selected_cpp_symbol}, ExportName{selected_export_name}, unpacked_options...);
                     }
                 },
                 options_tuple);

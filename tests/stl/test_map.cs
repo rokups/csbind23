@@ -125,7 +125,7 @@ public class MapTests
     {
         using var value = new UnorderedMap<long, MapItem>(ItemOwnership.Borrowed);
         using var source = new MapItem(123);
-        source.ReleaseOwnership();
+        source.SetOwnership(ItemOwnership.Borrowed);
         value.Add(7, source);
 
         var borrowed = value[7];
@@ -133,10 +133,9 @@ public class MapTests
         Assert.Equal(123, source.get());
 
         borrowed = value[7];
-        borrowed.TakeOwnership();
+        borrowed.SetOwnership(ItemOwnership.Owned);
 
         Assert.True(value.Remove(7));
-        borrowed.DestroyNative();
         borrowed.Dispose();
     }
 

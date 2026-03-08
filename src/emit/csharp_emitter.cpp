@@ -509,12 +509,6 @@ void emit_shared_pinvoke_types_if_needed(
         return;
     }
 
-    const auto shared_path = output_root / "csbind23.types.g.cs";
-    if (std::filesystem::exists(shared_path))
-    {
-        return;
-    }
-
     generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.types.g.cs"));
 }
 
@@ -526,24 +520,12 @@ void emit_shared_string_view_wrapper_if_needed(
         return;
     }
 
-    const auto shared_path = output_root / "csbind23_stl.StringView.g.cs";
-    if (std::filesystem::exists(shared_path))
-    {
-        return;
-    }
-
     generated_files.push_back(copy_support_csharp_file(output_root, "csbind23_stl.StringView.g.cs"));
 }
 
 void emit_shared_instance_cache_types_if_needed(
     const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
 {
-    const auto shared_path = output_root / "csbind23.instance_cache.g.cs";
-    if (std::filesystem::exists(shared_path))
-    {
-        return;
-    }
-
     generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.instance_cache.g.cs"));
 }
 
@@ -555,24 +537,12 @@ void emit_shared_array_interop_types_if_needed(
         return;
     }
 
-    const auto shared_path = output_root / "csbind23.array.g.cs";
-    if (std::filesystem::exists(shared_path))
-    {
-        return;
-    }
-
     generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.array.g.cs"));
 }
 
 void emit_shared_item_ownership_type_if_needed(
     const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
 {
-    const auto shared_path = output_root / "csbind23.ownership.g.cs";
-    if (std::filesystem::exists(shared_path))
-    {
-        return;
-    }
-
     generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.ownership.g.cs"));
 }
 
@@ -2162,13 +2132,14 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
     const bool use_shape_for_return = shape.supported && shape.generic_return_slot_id >= 0;
 
     const FunctionDecl& first = *method_group.instantiations.front();
+    const std::string method_name = method_group.name;
     const std::string return_type = use_shape_for_return
         ? generic_class_type_parameter_name(static_cast<std::size_t>(shape.generic_return_slot_id), class_generic_arity)
         : wrapper_return_type(module_decl, first);
 
     const std::string method_access = first.csharp_private ? "private" : "public";
     output.append_format("    {} {} {}(", method_access, return_type,
-        managed_name(module_decl, CSharpNameKind::Method, method_group.name));
+        managed_name(module_decl, CSharpNameKind::Method, method_name));
     for (std::size_t index = 0; index < first.parameters.size(); ++index)
     {
         const auto& parameter = first.parameters[index];
@@ -2188,7 +2159,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
     const std::string diagnostics_message = csharp_string_literal_escape(std::format(
         "No generic mapping for {}.{} with provided generic type arguments.",
         managed_name(module_decl, CSharpNameKind::Class, class_group.name),
-        managed_name(module_decl, CSharpNameKind::Method, method_group.name)));
+        managed_name(module_decl, CSharpNameKind::Method, method_name)));
 
     for (std::size_t inst_index = 0; inst_index < method_group.instantiations.size(); ++inst_index)
     {
@@ -2670,10 +2641,14 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         }
     }
 
-    output.append_line_format("    protected override void ReleaseNativeHandle(System.IntPtr handle, {} ownership)", item_ownership_type_name(module_decl));
+    output.append_line("    protected override void Dispose(bool disposing)");
     output.append_line("    {");
-    output.append_line_format("        if (ownership == {})", item_ownership_literal(module_decl, true));
+    output.append_line("        if (_cPtr.Handle != System.IntPtr.Zero)");
     output.append_line("        {");
+    output.append_line("            var handle = _cPtr.Handle;");
+    output.append_line("            var ownership = _ownership;");
+    output.append_line_format("            if (ownership == {})", item_ownership_literal(module_decl, true));
+    output.append_line("            {");
     for (std::size_t inst_index = 0; inst_index < class_group.instantiations.size(); ++inst_index)
     {
         const auto* class_decl = class_group.instantiations[inst_index];
@@ -2683,20 +2658,22 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
 
         if (inst_index == 0)
         {
-            output.append_line_format("            if ({})", condition);
+            output.append_line_format("                if ({})", condition);
         }
         else
         {
-            output.append_line_format("            else if ({})", condition);
+            output.append_line_format("                else if ({})", condition);
         }
-        output.append_line("            {");
+        output.append_line("                {");
         if (class_has_owned_ctor(*class_decl))
         {
-            output.append_line_format("                {}.{}_{}_destroy(handle);", native_class, module_decl.name, class_decl->name);
+            output.append_line_format("                    {}.{}_{}_destroy(handle);", native_class, module_decl.name, class_decl->name);
         }
-        output.append_line("            }");
+        output.append_line("                }");
     }
+    output.append_line("            }");
     output.append_line("        }");
+    output.append_line("        base.Dispose(disposing);");
     output.append_line("    }");
     output.append_line("}");
     output.append_line();
@@ -3601,47 +3578,32 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
     if (!has_base_class)
     {
-        if (emits_destroy)
-        {
-            output.append_line("    public void TakeOwnership()");
-            output.append_line("    {");
-            output.append_line("        TakeOwnershipCore();");
-            output.append_line("    }");
-            output.append_line();
-
-            output.append_line("    public void ReleaseOwnership()");
-            output.append_line("    {");
-            output.append_line("        ReleaseOwnershipCore();");
-            output.append_line("    }");
-            output.append_line();
-
-            output.append_line("    public void DestroyNative()");
-            output.append_line("    {");
-            output.append_line("        DestroyOwnedHandleCore();");
-            output.append_line("    }");
-            output.append_line();
-        }
-
-        output.append_line_format("    protected override void ReleaseNativeHandle(System.IntPtr handle, {} ownership)", item_ownership_type_name(module_decl));
+        output.append_line("    protected override void Dispose(bool disposing)");
         output.append_line("    {");
-        output.append_line("        var __csbind23_oldHandle = handle;");
+        output.append_line("        if (_cPtr.Handle != System.IntPtr.Zero)");
+        output.append_line("        {");
+        output.append_line("            var handle = _cPtr.Handle;");
+        output.append_line("            var ownership = _ownership;");
+        output.append_line("            var __csbind23_oldHandle = handle;");
 
         if (has_virtual_support)
         {
-            output.append_line_format("        {}.{}_{}_disconnect_director(handle);", native_class, module_name, class_decl.name);
+            output.append_line_format("            {}.{}_{}_disconnect_director(handle);", native_class, module_name, class_decl.name);
         }
 
-        output.append_line("        __csbind23_registry.Unregister(__csbind23_oldHandle);");
+        output.append_line("            __csbind23_registry.Unregister(__csbind23_oldHandle);");
         output.append_line();
 
-        output.append_line_format("        if (ownership == {})", item_ownership_literal(module_decl, true));
-        output.append_line("        {");
+        output.append_line_format("            if (ownership == {})", item_ownership_literal(module_decl, true));
+        output.append_line("            {");
         if (emits_destroy)
         {
             output.append_line_format(
-                "            {}.{}_{}_destroy(handle);", native_class, module_name, class_decl.name);
+                "                {}.{}_{}_destroy(handle);", native_class, module_name, class_decl.name);
         }
+        output.append_line("            }");
         output.append_line("        }");
+        output.append_line("        base.Dispose(disposing);");
         output.append_line("    }");
         output.append_line();
     }

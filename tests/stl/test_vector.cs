@@ -106,7 +106,7 @@ public class VectorTests
     {
         using var list = new Vector<VectorItem>(ItemOwnership.Borrowed);
         using var source = new VectorItem(123);
-        source.ReleaseOwnership();
+        source.SetOwnership(ItemOwnership.Borrowed);
         list.Add(source);
 
         var borrowed = list[0];
@@ -114,10 +114,9 @@ public class VectorTests
         Assert.Equal(123, source.get());
 
         borrowed = list[0];
-        borrowed.TakeOwnership();
+        borrowed.SetOwnership(ItemOwnership.Owned);
 
         list.RemoveAt(0);
-        borrowed.DestroyNative();
         borrowed.Dispose();
     }
 }

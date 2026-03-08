@@ -157,7 +157,7 @@ inline std::string make_associative_wrapper_csharp_code(std::string_view wrapper
     {
         get
         {
-            if (!__contains_key(key))
+            if (!ContainsKey(key))
             {
                 throw new System.Collections.Generic.KeyNotFoundException();
             }
@@ -172,7 +172,7 @@ inline std::string make_associative_wrapper_csharp_code(std::string_view wrapper
 
     public void Add(T0 key, T1 value)
     {
-        if (__contains_key(key))
+        if (ContainsKey(key))
         {
             throw new System.ArgumentException("An item with the same key has already been added.", nameof(key));
         }
@@ -185,20 +185,10 @@ inline std::string make_associative_wrapper_csharp_code(std::string_view wrapper
         Add(item.Key, item.Value);
     }
 
-    public void Clear()
-    {
-        clear();
-    }
-
     public bool Contains(System.Collections.Generic.KeyValuePair<T0, T1> item)
     {
         return TryGetValue(item.Key, out var value)
             && System.Collections.Generic.EqualityComparer<T1>.Default.Equals(value, item.Value);
-    }
-
-    public bool ContainsKey(T0 key)
-    {
-        return __contains_key(key);
     }
 
     public void CopyTo(System.Collections.Generic.KeyValuePair<T0, T1>[] array, int arrayIndex)
@@ -229,11 +219,6 @@ inline std::string make_associative_wrapper_csharp_code(std::string_view wrapper
         }
     }
 
-    public bool Remove(T0 key)
-    {
-        return __remove(key);
-    }
-
     public bool Remove(System.Collections.Generic.KeyValuePair<T0, T1> item)
     {
         if (!Contains(item))
@@ -241,12 +226,12 @@ inline std::string make_associative_wrapper_csharp_code(std::string_view wrapper
             return false;
         }
 
-        return __remove(item.Key);
+        return Remove(item.Key);
     }
 
     public bool TryGetValue(T0 key, out T1 value)
     {
-        if (__contains_key(key))
+        if (ContainsKey(key))
         {
             value = __get(key);
             return true;
@@ -694,7 +679,7 @@ detail::associative_map_builder_t<Specs...> add_map(BindingsGenerator& generator
     builder.csharp_interface("System.Collections.Generic.IDictionary<T0, T1>");
     builder.csharp_interface("System.Collections.Generic.IReadOnlyDictionary<T0, T1>");
     builder.template def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", Private{});
-    builder.template def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("clear", Private{});
+    builder.template def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("Clear");
     builder.template def_generic<
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_add<std::map<KeyType, ValueType>>;
@@ -704,7 +689,7 @@ detail::associative_map_builder_t<Specs...> add_map(BindingsGenerator& generator
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_contains_key<std::map<KeyType, ValueType>>;
         }, Specs>()...>(
-        "__contains_key", Private{}, detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_contains_key", "std::map"));
+        "ContainsKey", detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_contains_key", "std::map"));
     builder.template def_generic<
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_get<std::map<KeyType, ValueType>>;
@@ -729,7 +714,7 @@ detail::associative_map_builder_t<Specs...> add_map(BindingsGenerator& generator
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_remove<std::map<KeyType, ValueType>>;
         }, Specs>()...>(
-        "__remove", Private{}, detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_remove", "std::map"));
+        "Remove", detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_remove", "std::map"));
     builder.csharp_code(detail::make_associative_wrapper_csharp_code("Map"));
     return builder;
 }
@@ -744,7 +729,7 @@ detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(Bindings
     builder.csharp_interface("System.Collections.Generic.IDictionary<T0, T1>");
     builder.csharp_interface("System.Collections.Generic.IReadOnlyDictionary<T0, T1>");
     builder.template def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", Private{});
-    builder.template def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("clear", Private{});
+    builder.template def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("Clear");
     builder.template def_generic<
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_add<std::unordered_map<KeyType, ValueType>>;
@@ -754,7 +739,7 @@ detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(Bindings
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_contains_key<std::unordered_map<KeyType, ValueType>>;
         }, Specs>()...>(
-        "__contains_key", Private{}, detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_contains_key", "std::unordered_map"));
+        "ContainsKey", detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_contains_key", "std::unordered_map"));
     builder.template def_generic<
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_get<std::unordered_map<KeyType, ValueType>>;
@@ -779,7 +764,7 @@ detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(Bindings
         detail::resolve_nontype_from_spec<[]<typename KeyType, typename ValueType>() {
             return &csbind23::csbind23_associative_remove<std::unordered_map<KeyType, ValueType>>;
         }, Specs>()...>(
-        "__remove", Private{}, detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_remove", "std::unordered_map"));
+        "Remove", detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_remove", "std::unordered_map"));
     builder.csharp_code(detail::make_associative_wrapper_csharp_code("UnorderedMap"));
     return builder;
 }

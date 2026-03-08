@@ -280,6 +280,16 @@ inline int csbind23_string_compare_string(const std::string& value, const std::s
     return value.compare(other);
 }
 
+inline bool csbind23_string_equals_utf8(const std::string& value, const char* other)
+{
+    return csbind23_string_compare_utf8(value, other) == 0;
+}
+
+inline bool csbind23_string_equals_string(const std::string& value, const std::string& other)
+{
+    return csbind23_string_compare_string(value, other) == 0;
+}
+
 inline std::string csbind23_string_clone(const std::string& value)
 {
     return value;
@@ -459,107 +469,37 @@ inline std::string make_string_wrapper_csharp_code(std::string_view wrapper_name
         return this;
     }
 
-    public bool Contains(string value)
-    {
-        return __contains_utf8(value ?? string.Empty);
-    }
-
     public bool Contains(string value, global::System.StringComparison comparisonType)
     {
         return comparisonType == global::System.StringComparison.Ordinal
-            ? __contains_utf8(value ?? string.Empty)
+            ? Contains(value ?? string.Empty)
             : SnapshotManaged().Contains(value ?? string.Empty, comparisonType);
-    }
-
-    public bool StartsWith(string value)
-    {
-        return __starts_with_utf8(value ?? string.Empty);
     }
 
     public bool StartsWith(string value, global::System.StringComparison comparisonType)
     {
         return comparisonType == global::System.StringComparison.Ordinal
-            ? __starts_with_utf8(value ?? string.Empty)
+            ? StartsWith(value ?? string.Empty)
             : SnapshotManaged().StartsWith(value ?? string.Empty, comparisonType);
-    }
-
-    public bool EndsWith(string value)
-    {
-        return __ends_with_utf8(value ?? string.Empty);
     }
 
     public bool EndsWith(string value, global::System.StringComparison comparisonType)
     {
         return comparisonType == global::System.StringComparison.Ordinal
-            ? __ends_with_utf8(value ?? string.Empty)
+            ? EndsWith(value ?? string.Empty)
             : SnapshotManaged().EndsWith(value ?? string.Empty, comparisonType);
-    }
-
-    public int IndexOf(string value)
-    {
-        return __index_of_utf8(value ?? string.Empty);
     }
 
     public int IndexOf(string value, global::System.StringComparison comparisonType)
     {
         return comparisonType == global::System.StringComparison.Ordinal
-            ? __index_of_utf8(value ?? string.Empty)
+            ? IndexOf(value ?? string.Empty)
             : SnapshotManaged().IndexOf(value ?? string.Empty, comparisonType);
-    }
-
-    public int LastIndexOf(string value)
-    {
-        return __last_index_of_utf8(value ?? string.Empty);
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ Substring(int startIndex)
-    {
-        return __substring(startIndex);
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ Substring(int startIndex, int length)
-    {
-        return __substring_len(startIndex, length);
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ Replace(string oldValue, string newValue)
-    {
-        return __replace_utf8(oldValue ?? string.Empty, newValue ?? string.Empty);
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ Trim()
-    {
-        return __trim();
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ TrimStart()
-    {
-        return __trim_start();
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ TrimEnd()
-    {
-        return __trim_end();
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ ToUpperInvariant()
-    {
-        return __to_upper_invariant();
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ ToLowerInvariant()
-    {
-        return __to_lower_invariant();
     }
 
     public string[] Split(params char[] separators)
     {
         return SnapshotManaged().Split(separators);
-    }
-
-    public __CSBIND23_STRING_WRAPPER__ Clone()
-    {
-        return __clone();
     }
 
     public override string ToString()
@@ -582,29 +522,9 @@ inline std::string make_string_wrapper_csharp_code(std::string_view wrapper_name
         return false;
     }
 
-    public bool Equals(__CSBIND23_STRING_WRAPPER__ other)
-    {
-        return other is not null && __compare_string(other) == 0;
-    }
-
-    public bool Equals(string other)
-    {
-        return __compare_utf8(other ?? string.Empty) == 0;
-    }
-
     public override int GetHashCode()
     {
         return global::System.StringComparer.Ordinal.GetHashCode(SnapshotManaged());
-    }
-
-    public int CompareTo(__CSBIND23_STRING_WRAPPER__ other)
-    {
-        return other is null ? 1 : __compare_string(other);
-    }
-
-    public int CompareTo(string other)
-    {
-        return __compare_utf8(other ?? string.Empty);
     }
 
     public global::System.Collections.Generic.IEnumerator<char> GetEnumerator()
@@ -940,22 +860,24 @@ inline ClassBuilder add_string(BindingsGenerator& generator)
     builder.def<&csbind23::csbind23_string_assign_utf8>("__assign_utf8", Private{});
     builder.def<&csbind23::csbind23_string_append_utf8>("__append_utf8", Private{});
     builder.def<&csbind23::csbind23_string_append_string>("__append_string", Private{});
-    builder.def<&csbind23::csbind23_string_contains_utf8>("__contains_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_starts_with_utf8>("__starts_with_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_ends_with_utf8>("__ends_with_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_index_of_utf8>("__index_of_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_last_index_of_utf8>("__last_index_of_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_substring>("__substring", Private{});
-    builder.def<&csbind23::csbind23_string_substring_len>("__substring_len", Private{});
-    builder.def<&csbind23::csbind23_string_replace_utf8>("__replace_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_trim>("__trim", Private{});
-    builder.def<&csbind23::csbind23_string_trim_start>("__trim_start", Private{});
-    builder.def<&csbind23::csbind23_string_trim_end>("__trim_end", Private{});
-    builder.def<&csbind23::csbind23_string_to_upper_invariant>("__to_upper_invariant", Private{});
-    builder.def<&csbind23::csbind23_string_to_lower_invariant>("__to_lower_invariant", Private{});
-    builder.def<&csbind23::csbind23_string_compare_utf8>("__compare_utf8", Private{});
-    builder.def<&csbind23::csbind23_string_compare_string>("__compare_string", Private{});
-    builder.def<&csbind23::csbind23_string_clone>("__clone", Private{});
+    builder.def<&csbind23::csbind23_string_contains_utf8>("Contains");
+    builder.def<&csbind23::csbind23_string_starts_with_utf8>("StartsWith");
+    builder.def<&csbind23::csbind23_string_ends_with_utf8>("EndsWith");
+    builder.def<&csbind23::csbind23_string_index_of_utf8>("IndexOf");
+    builder.def<&csbind23::csbind23_string_last_index_of_utf8>("LastIndexOf");
+    builder.def<&csbind23::csbind23_string_substring>("Substring", ExportName{"__substring"});
+    builder.def<&csbind23::csbind23_string_substring_len>("Substring", ExportName{"__substring_len"});
+    builder.def<&csbind23::csbind23_string_replace_utf8>("Replace");
+    builder.def<&csbind23::csbind23_string_trim>("Trim");
+    builder.def<&csbind23::csbind23_string_trim_start>("TrimStart");
+    builder.def<&csbind23::csbind23_string_trim_end>("TrimEnd");
+    builder.def<&csbind23::csbind23_string_to_upper_invariant>("ToUpperInvariant");
+    builder.def<&csbind23::csbind23_string_to_lower_invariant>("ToLowerInvariant");
+    builder.def<&csbind23::csbind23_string_compare_utf8>("CompareTo", ExportName{"__compare_utf8"});
+    builder.def<&csbind23::csbind23_string_compare_string>("CompareTo", ExportName{"__compare_string"});
+    builder.def<&csbind23::csbind23_string_equals_utf8>("Equals", ExportName{"__equals_utf8"});
+    builder.def<&csbind23::csbind23_string_equals_string>("Equals", ExportName{"__equals_string"});
+    builder.def<&csbind23::csbind23_string_clone>("Clone");
     builder.csharp_code(detail::make_string_wrapper_csharp_code("String"));
     return builder;
 }

@@ -114,21 +114,6 @@ inline std::string make_vector_wrapper_csharp_code(std::string_view wrapper_name
         }
     }
 
-    public void Add(T item)
-    {
-        __add(item);
-    }
-
-    public void Clear()
-    {
-        clear();
-    }
-
-    public bool Contains(T item)
-    {
-        return __contains(item);
-    }
-
     public void CopyTo(T[] array, int arrayIndex)
     {
         System.ArgumentNullException.ThrowIfNull(array);
@@ -155,20 +140,10 @@ inline std::string make_vector_wrapper_csharp_code(std::string_view wrapper_name
         }
     }
 
-    public int IndexOf(T item)
-    {
-        return __index_of(item);
-    }
-
     public void Insert(int index, T item)
     {
         EnsureIndex(index, allowCount: true);
         __insert(index, item);
-    }
-
-    public bool Remove(T item)
-    {
-        return __remove_first(item);
     }
 
     public void RemoveAt(int index)
@@ -424,13 +399,13 @@ GenericClassBuilder<std::vector<Types>...> add_vector(BindingsGenerator& generat
     builder.csharp_interface("System.Collections.Generic.IList<T>");
     builder.csharp_interface("System.Collections.Generic.IReadOnlyList<T>");
     builder.template def_generic<[]<typename ClassType>() { return &ClassType::size; }>("size", Private{});
-    builder.template def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("clear", Private{});
+    builder.template def_generic<[]<typename ClassType>() { return &ClassType::clear; }>("Clear");
     builder.template def<&csbind23::csbind23_vector_add<Types>...>(
-        "__add", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_add"));
+        "Add", detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_add"));
     builder.template def<&csbind23::csbind23_vector_contains<Types>...>(
-        "__contains", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_contains"));
+        "Contains", detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_contains"));
     builder.template def<&csbind23::csbind23_vector_index_of<Types>...>(
-        "__index_of", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_index_of"));
+        "IndexOf", detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_index_of"));
     builder.template def<&csbind23::csbind23_vector_get<Types>...>(
         "__get", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_get"));
     builder.template def<&csbind23::csbind23_vector_set<Types>...>(
@@ -439,7 +414,7 @@ GenericClassBuilder<std::vector<Types>...> add_vector(BindingsGenerator& generat
         "__insert", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_insert"));
     builder.template def<&csbind23::csbind23_vector_erase_at<Types>...>(
         "__erase_at", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_erase_at"));
-    builder.template def<&csbind23::csbind23_vector_remove_first<Types>...>("__remove_first", Private{},
+    builder.template def<&csbind23::csbind23_vector_remove_first<Types>...>("Remove",
         detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_remove_first"));
     builder.csharp_code(detail::make_vector_wrapper_csharp_code("Vector"));
     return builder;
