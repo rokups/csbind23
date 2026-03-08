@@ -11,6 +11,11 @@
 namespace csbind23
 {
 
+inline constexpr std::string_view stl_module_name()
+{
+    return "csbind23_stl";
+}
+
 enum class CSharpNameKind
 {
     Class,

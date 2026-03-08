@@ -90,10 +90,9 @@ inline void register_bindings_vector(BindingsGenerator& generator, std::string_v
         .def<&vector_tests::VectorItem::get>()
         .def<&vector_tests::VectorItem::set>();
 
-    csbind23::add_vector<double>(module);
-    csbind23::add_vector<vector_tests::VectorItem, int>(module);
-    csbind23::add_vector<vector_tests::VectorItem*>(module);
-
+    csbind23::add_vector<double>(generator);
+    csbind23::add_vector<vector_tests::VectorItem, int>(generator);
+    csbind23::add_vector<vector_tests::VectorItem*>(generator);
 }
 
 } // namespace csbind23::testing

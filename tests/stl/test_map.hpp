@@ -94,11 +94,11 @@ inline void register_bindings_map(BindingsGenerator& generator, std::string_view
     csbind23::add_map<
         TemplateArgs<long long, int>,
         TemplateArgs<std::string, int>,
-        TemplateArgs<long long, map_tests::MapItem>>(module);
+        TemplateArgs<long long, map_tests::MapItem>>(generator);
     csbind23::add_unordered_map<
         TemplateArgs<long long, int>,
         TemplateArgs<std::string, int>,
-        TemplateArgs<long long, map_tests::MapItem*>>(module);
+        TemplateArgs<long long, map_tests::MapItem*>>(generator);
 }
 
 } // namespace csbind23::testing

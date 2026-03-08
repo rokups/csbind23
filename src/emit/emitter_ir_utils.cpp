@@ -46,6 +46,28 @@ std::vector<const ModuleDecl*> visible_modules(const std::vector<ModuleDecl>& mo
     std::vector<const ModuleDecl*> visible;
     visible.push_back(&module_decl);
 
+    if (module_decl.name == stl_module_name())
+    {
+        for (const auto& other_module : modules)
+        {
+            if (other_module.name == module_decl.name)
+            {
+                continue;
+            }
+
+            visible.push_back(&other_module);
+        }
+        return visible;
+    }
+
+    if (module_decl.name != stl_module_name())
+    {
+        if (const ModuleDecl* stl_module = find_module_by_name(modules, stl_module_name()); stl_module != nullptr)
+        {
+            visible.push_back(stl_module);
+        }
+    }
+
     for (const auto& imported_module_name : module_decl.imported_modules)
     {
         if (imported_module_name == module_decl.name)

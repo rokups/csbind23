@@ -685,9 +685,9 @@ namespace csbind23
 {
 
 template <typename... Specs>
-detail::associative_map_builder_t<Specs...> add_map(ModuleBuilder& module)
+detail::associative_map_builder_t<Specs...> add_map(BindingsGenerator& generator)
 {
-    module.cabi_include("<csbind23/std.hpp>");
+    auto module = detail::ensure_stl_module(generator);
 
     auto builder = module.class_generic<std::map, Specs...>("Map");
     builder.template ctor<>();
@@ -736,9 +736,9 @@ detail::associative_map_builder_t<Specs...> add_map(ModuleBuilder& module)
 }
 
 template <typename... Specs>
-detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(ModuleBuilder& module)
+detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(BindingsGenerator& generator)
 {
-    module.cabi_include("<csbind23/std.hpp>");
+    auto module = detail::ensure_stl_module(generator);
 
     auto builder = module.class_generic<std::unordered_map, Specs...>("UnorderedMap");
     builder.template ctor<>();

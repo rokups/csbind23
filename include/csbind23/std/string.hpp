@@ -910,9 +910,9 @@ template <> struct Converter<const std::string*>
 namespace csbind23
 {
 
-inline ClassBuilder add_string(ModuleBuilder& module)
+inline ClassBuilder add_string(BindingsGenerator& generator)
 {
-    module.cabi_include("<csbind23/std.hpp>");
+    auto module = detail::ensure_stl_module(generator);
 
     auto builder = module.class_<std::string>("String", CppName{"std::string"});
     builder.csharp_namespace("Std");

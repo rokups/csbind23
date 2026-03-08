@@ -1,5 +1,6 @@
 #pragma once
 
+#include "csbind23/bindings_generator.hpp"
 #include "csbind23/type_utils.hpp"
 
 #include <string>
@@ -8,6 +9,13 @@
 
 namespace csbind23::detail
 {
+inline ModuleBuilder ensure_stl_module(BindingsGenerator& generator)
+{
+    auto module = generator.module(stl_module_name());
+    module.cabi_include("<csbind23/std.hpp>");
+    return module;
+}
+
 inline std::string replace_all(std::string value, std::string_view from, std::string_view to)
 {
     std::size_t start = 0;

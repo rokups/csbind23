@@ -415,9 +415,9 @@ namespace csbind23
 {
 
 template <typename... Types>
-GenericClassBuilder<std::vector<Types>...> add_vector(ModuleBuilder& module)
+GenericClassBuilder<std::vector<Types>...> add_vector(BindingsGenerator& generator)
 {
-    module.cabi_include("<csbind23/std.hpp>");
+    auto module = detail::ensure_stl_module(generator);
 
     auto builder = module.class_generic<std::vector, Types...>("Vector");
     builder.template ctor<>();

@@ -78,6 +78,7 @@ foreach(test_name IN LISTS E2E_TEST_NAMES)
     list(APPEND E2E_GENERATED_CABI_FILES "${E2E_GENERATED_ROOT}/cabi/${cabi_module_name}_cabi.cpp")
 endforeach()
 list(APPEND E2E_GENERATED_CABI_FILES "${E2E_GENERATED_ROOT}/cabi/csbind23_core_cabi.cpp")
+list(APPEND E2E_GENERATED_CABI_FILES "${E2E_GENERATED_ROOT}/cabi/csbind23_stl_cabi.cpp")
 
 set(E2E_REGISTRY_CONTENT "#include \"csbind23/bindings_generator.hpp\"\n\n")
 string(APPEND E2E_REGISTRY_CONTENT "${E2E_REGISTRY_INCLUDES}")

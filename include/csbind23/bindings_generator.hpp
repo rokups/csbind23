@@ -366,6 +366,28 @@ private:
         std::vector<const ModuleDecl*> visible_modules;
         visible_modules.push_back(&current_module);
 
+        if (current_module.name == stl_module_name())
+        {
+            for (const auto& module_decl : modules_)
+            {
+                if (module_decl.name == current_module.name)
+                {
+                    continue;
+                }
+
+                visible_modules.push_back(&module_decl);
+            }
+            return visible_modules;
+        }
+
+        if (current_module.name != stl_module_name())
+        {
+            if (const ModuleDecl* stl_module = find_module(stl_module_name()); stl_module != nullptr)
+            {
+                visible_modules.push_back(stl_module);
+            }
+        }
+
         for (const auto& imported_module_name : current_module.imported_modules)
         {
             if (imported_module_name == current_module.name)
@@ -387,6 +409,70 @@ private:
         }
 
         return visible_modules;
+    }
+
+    static void append_unique_strings(std::vector<std::string>& destination, const std::vector<std::string>& source)
+    {
+        for (const auto& value : source)
+        {
+            if (std::find(destination.begin(), destination.end(), value) == destination.end())
+            {
+                destination.push_back(value);
+            }
+        }
+    }
+
+    static void finalize_stl_module(std::vector<ModuleDecl>& modules)
+    {
+        auto stl_module_it = std::find_if(modules.begin(), modules.end(),
+            [](const ModuleDecl& module_decl) { return module_decl.name == stl_module_name(); });
+        if (stl_module_it == modules.end())
+        {
+            return;
+        }
+
+        ModuleDecl& stl_module = *stl_module_it;
+        for (const auto& module_decl : modules)
+        {
+            if (module_decl.name == stl_module.name)
+            {
+                continue;
+            }
+
+            append_unique_strings(stl_module.cabi_includes, module_decl.cabi_includes);
+        }
+
+        if (stl_module.pinvoke_library.empty() || stl_module.pinvoke_library == stl_module.name)
+        {
+            std::string selected_library;
+            for (const auto& module_decl : modules)
+            {
+                if (module_decl.name == stl_module.name || module_decl.pinvoke_library.empty())
+                {
+                    continue;
+                }
+
+                if (selected_library.empty())
+                {
+                    selected_library = module_decl.pinvoke_library;
+                    continue;
+                }
+
+                if (module_decl.pinvoke_library != selected_library)
+                {
+                    throw std::runtime_error(std::format(
+                        "STL module '{}' cannot infer a single pinvoke library. Saw '{}' and '{}'.",
+                        stl_module.name,
+                        selected_library,
+                        module_decl.pinvoke_library));
+                }
+            }
+
+            if (!selected_library.empty())
+            {
+                stl_module.pinvoke_library = selected_library;
+            }
+        }
     }
 
     void validate_imports() const
@@ -712,6 +798,7 @@ private:
     {
         validate_imports();
         std::vector<ModuleDecl> modules = modules_;
+        finalize_stl_module(modules);
         finalize_visible_type_refs(modules);
         return modules;
     }
