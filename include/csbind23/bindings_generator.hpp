@@ -3,12 +3,14 @@
 #include "csbind23/ir.hpp"
 #include "csbind23/type_utils.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <format>
 #include <initializer_list>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -292,6 +294,12 @@ private:
         const ClassDecl* class_decl = nullptr;
     };
 
+    struct BoundEnumMatch
+    {
+        const ModuleDecl* module_decl = nullptr;
+        const EnumDecl* enum_decl = nullptr;
+    };
+
     template <typename Type> static void assign_managed_converter(TypeRef& type_ref, bool for_return_type)
     {
         type_ref.managed_type_name = for_return_type
@@ -319,6 +327,11 @@ private:
         return base_namespace + "." + class_decl.csharp_namespace;
     }
 
+    static std::string csharp_namespace_name_for(const ModuleDecl& module_decl)
+    {
+        return module_decl.csharp_namespace.empty() ? std::string("CsBind23.Generated") : module_decl.csharp_namespace;
+    }
+
     static std::string managed_class_name_for(const ModuleDecl& module_decl, const ClassDecl& class_decl)
     {
         if (!module_decl.csharp_name_formatter)
@@ -330,7 +343,121 @@ private:
         return formatted.empty() ? class_decl.name : formatted;
     }
 
-    BoundClassMatch find_bound_class(std::string_view cpp_name) const
+    static std::string managed_enum_name_for(const ModuleDecl& module_decl, const EnumDecl& enum_decl)
+    {
+        if (!module_decl.csharp_name_formatter)
+        {
+            return enum_decl.name;
+        }
+
+        const std::string formatted = module_decl.csharp_name_formatter(CSharpNameKind::Class, enum_decl.name);
+        return formatted.empty() ? enum_decl.name : formatted;
+    }
+
+    const ModuleDecl* find_module(std::string_view name) const
+    {
+        const auto it = std::find_if(modules_.begin(), modules_.end(),
+            [name](const ModuleDecl& module_decl) { return module_decl.name == name; });
+        return it == modules_.end() ? nullptr : &*it;
+    }
+
+    std::vector<const ModuleDecl*> visible_modules_for(const ModuleDecl& current_module) const
+    {
+        std::vector<const ModuleDecl*> visible_modules;
+        visible_modules.push_back(&current_module);
+
+        for (const auto& imported_module_name : current_module.imported_modules)
+        {
+            if (imported_module_name == current_module.name)
+            {
+                throw std::runtime_error(std::format(
+                    "Module '{}' cannot import itself.", current_module.name));
+            }
+
+            const ModuleDecl* imported_module = find_module(imported_module_name);
+            if (imported_module == nullptr)
+            {
+                continue;
+            }
+
+            if (std::find(visible_modules.begin(), visible_modules.end(), imported_module) == visible_modules.end())
+            {
+                visible_modules.push_back(imported_module);
+            }
+        }
+
+        return visible_modules;
+    }
+
+    void validate_imports() const
+    {
+        for (const auto& module_decl : modules_)
+        {
+            for (const auto& imported_module_name : module_decl.imported_modules)
+            {
+                if (imported_module_name == module_decl.name)
+                {
+                    throw std::runtime_error(std::format(
+                        "Module '{}' cannot import itself.", module_decl.name));
+                }
+
+                if (find_module(imported_module_name) == nullptr)
+                {
+                    throw std::runtime_error(std::format(
+                        "Module '{}' imports unknown module '{}'.", module_decl.name, imported_module_name));
+                }
+            }
+        }
+    }
+
+    template <typename Match, typename Finder>
+    Match find_visible_unique_match(
+        std::string_view kind, std::string_view cpp_name, const ModuleDecl* current_module, Finder&& finder) const
+    {
+        if (current_module == nullptr)
+        {
+            return finder(nullptr);
+        }
+
+        std::vector<Match> matches;
+        for (const ModuleDecl* visible_module : visible_modules_for(*current_module))
+        {
+            Match match = finder(visible_module);
+            if (match.module_decl != nullptr)
+            {
+                matches.push_back(match);
+            }
+        }
+
+        if (matches.empty())
+        {
+            return {};
+        }
+
+        if (matches.size() > 1)
+        {
+            std::string owner_names;
+            for (std::size_t index = 0; index < matches.size(); ++index)
+            {
+                if (index > 0)
+                {
+                    owner_names += ", ";
+                }
+                owner_names += matches[index].module_decl->name;
+            }
+
+            throw std::runtime_error(std::format(
+                "Ambiguous {} reuse for C++ type '{}' in module '{}'. Visible owners: {}.",
+                kind,
+                cpp_name,
+                current_module->name,
+                owner_names));
+        }
+
+        return matches.front();
+    }
+
+    BoundClassMatch find_bound_class_any(std::string_view cpp_name) const
     {
         for (const auto& module_decl : modules_)
         {
@@ -359,24 +486,92 @@ private:
         return {};
     }
 
-    template <typename Type>
+    BoundClassMatch find_visible_bound_class(const ModuleDecl* current_module, std::string_view cpp_name) const
+    {
+        return find_visible_unique_match<BoundClassMatch>("class", cpp_name, current_module,
+            [&](const ModuleDecl* visible_module) {
+                if (visible_module == nullptr)
+                {
+                    return find_bound_class_any(cpp_name);
+                }
+                return find_bound_class_in_module(*visible_module, cpp_name);
+            });
+    }
+
+    BoundEnumMatch find_bound_enum_any(std::string_view cpp_name) const
+    {
+        for (const auto& module_decl : modules_)
+        {
+            for (const auto& enum_decl : module_decl.enums)
+            {
+                if (enum_decl.cpp_name == cpp_name)
+                {
+                    return BoundEnumMatch{&module_decl, &enum_decl};
+                }
+            }
+        }
+
+        return {};
+    }
+
+    BoundEnumMatch find_bound_enum_in_module(const ModuleDecl& module_decl, std::string_view cpp_name) const
+    {
+        for (const auto& enum_decl : module_decl.enums)
+        {
+            if (enum_decl.cpp_name == cpp_name)
+            {
+                return BoundEnumMatch{&module_decl, &enum_decl};
+            }
+        }
+
+        return {};
+    }
+
+    BoundEnumMatch find_visible_bound_enum(const ModuleDecl* current_module, std::string_view cpp_name) const
+    {
+        return find_visible_unique_match<BoundEnumMatch>("enum", cpp_name, current_module,
+            [&](const ModuleDecl* visible_module) {
+                if (visible_module == nullptr)
+                {
+                    return find_bound_enum_any(cpp_name);
+                }
+                return find_bound_enum_in_module(*visible_module, cpp_name);
+            });
+    }
+
+    bool is_secondary_base_for_any_class(std::string_view cpp_name) const
+    {
+        for (const auto& module_decl : modules_)
+        {
+            for (const auto& class_decl : module_decl.classes)
+            {
+                for (std::size_t index = 1; index < class_decl.base_classes.size(); ++index)
+                {
+                    if (class_decl.base_classes[index].cpp_name == cpp_name)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
     void assign_bound_std_string_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
     {
-        if (current_module == nullptr)
+        if (current_module == nullptr || type_ref.cpp_name != "std::string")
         {
             return;
         }
 
-        using NoRef = std::remove_reference_t<Type>;
-        using Bare = std::remove_cv_t<NoRef>;
-        using Base = std::remove_cv_t<std::remove_pointer_t<Bare>>;
-        if constexpr (!std::is_same_v<Base, std::string>)
-        {
-            return;
-        }
-
-        const auto match = find_bound_class_in_module(*current_module, "std::string");
+        const auto match = find_visible_bound_class(current_module, "std::string");
         if (match.module_decl == nullptr || match.class_decl == nullptr)
+        {
+            return;
+        }
+
+        if ((type_ref.is_reference || type_ref.is_pointer) && is_secondary_base_for_any_class(type_ref.cpp_name))
         {
             return;
         }
@@ -387,7 +582,7 @@ private:
 
         type_ref.managed_type_name = qualified_managed_class;
 
-        if constexpr (std::is_same_v<Bare, std::string> && !std::is_pointer_v<NoRef> && !std::is_reference_v<Type>)
+        if (!type_ref.is_pointer && !type_ref.is_reference)
         {
             type_ref.managed_to_pinvoke_expression =
                 "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} is null ? string.Empty : {value}.ToString())";
@@ -400,11 +595,11 @@ private:
             return;
         }
 
-        if constexpr ((std::is_reference_v<Type> || std::is_pointer_v<NoRef>) && std::is_same_v<Base, std::string>)
+        if (type_ref.is_reference || type_ref.is_pointer)
         {
             type_ref.managed_to_pinvoke_expression = "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
 
-            if constexpr (!std::is_const_v<std::remove_pointer_t<NoRef>> && !std::is_const_v<NoRef>)
+            if (!type_ref.is_const)
             {
                 type_ref.managed_finalize_to_pinvoke_statement = "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
             }
@@ -413,16 +608,14 @@ private:
         }
     }
 
-    template <typename Type> void assign_bound_class_managed_converter(TypeRef& type_ref) const
+    void assign_bound_class_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
     {
-        using NoRef = std::remove_reference_t<Type>;
-        using Base = std::remove_cv_t<std::remove_pointer_t<NoRef>>;
-        if constexpr (!std::is_class_v<Base>)
+        if (type_ref.cpp_name.empty() || type_ref.cpp_name == "std::string")
         {
             return;
         }
 
-        const auto match = find_bound_class(detail::qualified_type_name<Base>());
+        const auto match = find_visible_bound_class(current_module, type_ref.cpp_name);
         if (match.module_decl == nullptr || match.class_decl == nullptr)
         {
             return;
@@ -432,9 +625,7 @@ private:
         const std::string managed_class = managed_class_name_for(*match.module_decl, *match.class_decl);
         const std::string qualified_managed_class = "global::" + csharp_namespace + "." + managed_class;
         const std::string ownership_type = "global::" + csharp_namespace + ".ItemOwnership";
-        const std::string ownership_literal = ownership_type + (!std::is_reference_v<Type> && !std::is_pointer_v<NoRef>
-                ? ".Owned"
-                : ".Borrowed");
+        const std::string ownership_literal = ownership_type + (!type_ref.is_reference && !type_ref.is_pointer ? ".Owned" : ".Borrowed");
 
         type_ref.managed_type_name = qualified_managed_class;
         type_ref.managed_to_pinvoke_expression = "({value} is null ? System.IntPtr.Zero : {value}._cPtr.Handle)";
@@ -447,10 +638,88 @@ private:
             ownership_literal);
     }
 
+    void assign_bound_enum_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
+    {
+        if (type_ref.cpp_name.empty())
+        {
+            return;
+        }
+
+        const auto match = find_visible_bound_enum(current_module, type_ref.cpp_name);
+        if (match.module_decl == nullptr || match.enum_decl == nullptr)
+        {
+            return;
+        }
+
+        type_ref.managed_type_name = "global::" + csharp_namespace_name_for(*match.module_decl);
+        type_ref.managed_type_name += "." + managed_enum_name_for(*match.module_decl, *match.enum_decl);
+        type_ref.pinvoke_name = type_ref.managed_type_name;
+    }
+
+    void finalize_visible_type_ref(TypeRef& type_ref, const ModuleDecl* current_module) const
+    {
+        if (type_ref.cpp_name == "std::string")
+        {
+            assign_bound_std_string_managed_converter(type_ref, current_module);
+        }
+
+        if (!type_ref.has_managed_converter())
+        {
+            assign_bound_class_managed_converter(type_ref, current_module);
+        }
+
+        assign_bound_enum_managed_converter(type_ref, current_module);
+    }
+
+    void finalize_visible_type_refs(std::vector<ModuleDecl>& modules) const
+    {
+        for (auto& module_decl : modules)
+        {
+            for (auto& function_decl : module_decl.functions)
+            {
+                finalize_visible_type_ref(function_decl.return_type, &module_decl);
+                for (auto& parameter : function_decl.parameters)
+                {
+                    finalize_visible_type_ref(parameter.type, &module_decl);
+                }
+            }
+
+            for (auto& class_decl : module_decl.classes)
+            {
+                for (auto& method_decl : class_decl.methods)
+                {
+                    finalize_visible_type_ref(method_decl.return_type, &module_decl);
+                    for (auto& parameter : method_decl.parameters)
+                    {
+                        finalize_visible_type_ref(parameter.type, &module_decl);
+                    }
+                }
+
+                for (auto& property_decl : class_decl.properties)
+                {
+                    finalize_visible_type_ref(property_decl.type, &module_decl);
+                }
+            }
+
+            for (auto& enum_decl : module_decl.enums)
+            {
+                finalize_visible_type_ref(enum_decl.underlying_type, &module_decl);
+            }
+        }
+    }
+
+    std::vector<ModuleDecl> resolved_modules() const
+    {
+        validate_imports();
+        std::vector<ModuleDecl> modules = modules_;
+        finalize_visible_type_refs(modules);
+        return modules;
+    }
+
     template <typename Type>
     void apply_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module, bool for_return_type) const
     {
-        assign_bound_std_string_managed_converter<Type>(type_ref, current_module);
+        assign_bound_std_string_managed_converter(type_ref, current_module);
         if (type_ref.has_managed_converter())
         {
             return;
@@ -483,7 +752,7 @@ private:
             }
         }
 
-        assign_bound_class_managed_converter<Type>(type_ref);
+        assign_bound_class_managed_converter(type_ref, current_module);
         if (type_ref.has_managed_converter())
         {
             return;
@@ -492,6 +761,7 @@ private:
         using EnumBase = std::remove_cv_t<std::remove_pointer_t<NoRef>>;
         if constexpr (std::is_enum_v<EnumBase>)
         {
+            assign_bound_enum_managed_converter(type_ref, current_module);
             if (type_ref.managed_type_name.empty())
             {
                 type_ref.managed_type_name = detail::unqualified_type_name<EnumBase>();
@@ -519,6 +789,22 @@ public:
     ModuleBuilder& csharp_api_class(std::string_view class_name)
     {
         module_decl_->csharp_api_class = std::string(class_name);
+        return *this;
+    }
+
+    ModuleBuilder& import_module(std::string_view module_name)
+    {
+        if (module_name == module_decl_->name)
+        {
+            throw std::runtime_error(std::format("Module '{}' cannot import itself.", module_decl_->name));
+        }
+
+        const std::string imported_name(module_name);
+        if (std::find(module_decl_->imported_modules.begin(), module_decl_->imported_modules.end(), imported_name)
+            == module_decl_->imported_modules.end())
+        {
+            module_decl_->imported_modules.push_back(imported_name);
+        }
         return *this;
     }
 

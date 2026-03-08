@@ -1,6 +1,7 @@
 #include "csbind23/emit/cabi_emitter.hpp"
 
 #include "cabi_emitter_utils.hpp"
+#include "emitter_ir_utils.hpp"
 
 #include "csbind23/text_writer.hpp"
 
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace csbind23::emit
@@ -406,7 +408,9 @@ void append_disconnect_body(TextWriter& output, const std::string& module_name, 
 } // namespace
 
 std::vector<std::filesystem::path> emit_cabi_module(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root)
+    const ModuleDecl& module_decl,
+    const std::vector<ModuleDecl>& all_modules,
+    const std::filesystem::path& output_root)
 {
     std::filesystem::create_directories(output_root);
 
@@ -420,9 +424,16 @@ std::vector<std::filesystem::path> emit_cabi_module(
         #include <type_traits>
         #include <typeinfo>
     )cpp");
-    for (const auto& include_directive : module_decl.cabi_includes)
+    std::unordered_set<std::string> include_directives;
+    for (const auto& visible_module : all_modules)
     {
-        generated.append_line_format("#include {}", include_directive);
+        for (const auto& include_directive : visible_module.cabi_includes)
+        {
+            if (include_directives.insert(include_directive).second)
+            {
+                generated.append_line_format("#include {}", include_directive);
+            }
+        }
     }
     generated.append_line();
     generated.append_line_format("namespace generated::{} {{", module_decl.name);
@@ -475,14 +486,16 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl);
+        const auto emitted_methods = collect_emitted_methods(all_modules, module_decl, class_decl);
         const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
         const bool has_virtual_director = !virtual_methods.empty();
+        const auto assignable_classes = polymorphic_assignable_classes(all_modules, class_decl.cpp_name);
 
         std::size_t class_type_id = 0;
-        for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
+        for (std::size_t i = 0; i < assignable_classes.size(); ++i)
         {
-            if (module_decl.classes[i].cpp_name == class_decl.cpp_name)
+            if (assignable_classes[i].class_decl != nullptr
+                && assignable_classes[i].class_decl->cpp_name == class_decl.cpp_name)
             {
                 class_type_id = i;
                 break;
@@ -509,9 +522,10 @@ std::vector<std::filesystem::path> emit_cabi_module(
             }
             const auto& __csbind23_dynamic_type = typeid(*__csbind23_self_cpp);
         )cpp");
-        for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
+        for (std::size_t i = 0; i < assignable_classes.size(); ++i)
         {
-            generated.append_line_format("    if (__csbind23_dynamic_type == typeid({}))", module_decl.classes[i].cpp_name);
+            generated.append_line_format(
+                "    if (__csbind23_dynamic_type == typeid({}))", assignable_classes[i].class_decl->cpp_name);
             generated.append_line("    {");
             generated.append_line_format("        return {};", i);
             generated.append_line("    }");
@@ -535,13 +549,13 @@ std::vector<std::filesystem::path> emit_cabi_module(
         )cpp");
         generated.append_line("    switch (target_type_id)");
         generated.append_line("    {");
-        for (std::size_t i = 0; i < module_decl.classes.size(); ++i)
+        for (std::size_t i = 0; i < assignable_classes.size(); ++i)
         {
             generated.append_line_format("    case {}:", i);
             generated.append_line_format(
                 "        return csbind23::cabi::detail::to_c_abi_for<{}*>(__csbind23_cast_handle<{}>(__csbind23_self_cpp));",
-                module_decl.classes[i].cpp_name,
-                module_decl.classes[i].cpp_name);
+            assignable_classes[i].class_decl->cpp_name,
+            assignable_classes[i].class_decl->cpp_name);
         }
         generated.append_line("    default:");
         generated.append_line("        return self;");

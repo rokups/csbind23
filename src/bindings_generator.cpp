@@ -25,10 +25,11 @@ const std::vector<ModuleDecl>& BindingsGenerator::modules() const
 
 std::vector<std::filesystem::path> BindingsGenerator::generate_cabi(const std::filesystem::path& output_root) const
 {
+    const auto modules = resolved_modules();
     std::vector<std::filesystem::path> generated_files;
-    for (const auto& module_decl : modules_)
+    for (const auto& module_decl : modules)
     {
-        auto module_files = emit::emit_cabi_module(module_decl, output_root);
+        auto module_files = emit::emit_cabi_module(module_decl, modules, output_root);
         generated_files.insert(generated_files.end(), module_files.begin(), module_files.end());
     }
     return generated_files;
@@ -36,10 +37,11 @@ std::vector<std::filesystem::path> BindingsGenerator::generate_cabi(const std::f
 
 std::vector<std::filesystem::path> BindingsGenerator::generate_csharp(const std::filesystem::path& output_root) const
 {
+    const auto modules = resolved_modules();
     std::vector<std::filesystem::path> generated_files;
-    for (const auto& module_decl : modules_)
+    for (const auto& module_decl : modules)
     {
-        auto module_files = emit::emit_csharp_module(module_decl, output_root);
+        auto module_files = emit::emit_csharp_module(module_decl, modules, output_root);
         generated_files.insert(generated_files.end(), module_files.begin(), module_files.end());
     }
     return generated_files;

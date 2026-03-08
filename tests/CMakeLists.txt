@@ -65,6 +65,11 @@ foreach(test_name IN LISTS E2E_TEST_NAMES)
         set(cabi_module_name "class_module")
     elseif (test_name STREQUAL "enum")
         set(cabi_module_name "enum_module")
+    elseif (test_name STREQUAL "module_import")
+        list(APPEND E2E_GENERATED_CABI_FILES
+            "${E2E_GENERATED_ROOT}/cabi/module_import_animals_cabi.cpp"
+            "${E2E_GENERATED_ROOT}/cabi/module_import_consumer_cabi.cpp")
+        continue()
     elseif (test_name STREQUAL "virtual")
         set(cabi_module_name "virtual_module")
     else()

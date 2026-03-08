@@ -752,6 +752,25 @@ bool parameter_is_ref(const ParameterDecl& parameter)
     return false;
 }
 
+bool class_is_secondary_base(const std::vector<ModuleDecl>& all_modules, std::string_view cpp_name)
+{
+    for (const auto& module_decl : all_modules)
+    {
+        for (const auto& class_decl : module_decl.classes)
+        {
+            for (std::size_t index = 1; index < class_decl.base_classes.size(); ++index)
+            {
+                if (class_decl.base_classes[index].cpp_name == cpp_name)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 bool parameter_is_direct_ref(const ParameterDecl& parameter)
 {
     return parameter_is_ref(parameter) && parameter.type.managed_to_pinvoke_expression.empty();
@@ -802,19 +821,20 @@ std::string reflection_parameter_type_expression(const ParameterDecl& parameter)
     return type_expression;
 }
 
-const ClassDecl* primary_base_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+ClassBinding primary_base_class(
+    const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
     if (!class_decl.base_classes.empty())
     {
-        return find_class_by_cpp_name(module_decl, class_decl.base_classes.front().cpp_name);
+        return find_visible_class_by_cpp_name(all_modules, module_decl, class_decl.base_classes.front().cpp_name);
     }
 
     if (!class_decl.base_cpp_name.empty())
     {
-        return find_class_by_cpp_name(module_decl, class_decl.base_cpp_name);
+        return find_visible_class_by_cpp_name(all_modules, module_decl, class_decl.base_cpp_name);
     }
 
-    return nullptr;
+    return {};
 }
 
 MethodCollectionOptions csharp_method_collection_options()
@@ -830,6 +850,9 @@ struct GenericClassGroup
     std::string name;
     std::vector<const ClassDecl*> instantiations;
 };
+
+ClassBinding find_pointer_class_return_binding(
+    const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl, const FunctionDecl& function_decl);
 
 std::vector<GenericFunctionGroup> collect_generic_function_groups(const std::vector<FunctionDecl>& functions)
 {
@@ -915,35 +938,73 @@ std::vector<GenericClassGroup> collect_generic_class_groups(const std::vector<Cl
     return groups;
 }
 
-const ClassDecl* find_pointer_class_return(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+const ClassDecl* find_pointer_class_return(
+    const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+{
+    const auto match = find_pointer_class_return_binding(all_modules, module_decl, function_decl);
+    return match.class_decl;
+}
+
+ClassBinding find_pointer_class_return_binding(
+    const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl, const FunctionDecl& function_decl)
 {
     const auto& return_type = function_decl.return_type;
     if (!return_type.is_pointer && !return_type.is_reference)
     {
-        return nullptr;
+        return {};
     }
 
-    if (return_type.has_managed_converter())
+    const auto match = find_visible_class_by_cpp_name(all_modules, module_decl, return_type.cpp_name);
+    if (match.class_decl == nullptr)
+    {
+        return {};
+    }
+
+    if (return_type.has_managed_converter() && !class_is_secondary_base(all_modules, return_type.cpp_name))
+    {
+        return {};
+    }
+
+    return match;
+}
+
+const ClassDecl* find_pointer_class_return(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+{
+    if (function_decl.return_type.has_managed_converter())
     {
         return nullptr;
     }
 
-    return find_class_by_cpp_name(module_decl, return_type.cpp_name);
+    return find_pointer_class_return(std::vector<ModuleDecl>{module_decl}, module_decl, function_decl);
 }
 
-std::string wrapper_return_type(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+std::string wrapper_return_type(
+    const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl, const FunctionDecl& function_decl)
 {
     if (is_cabi_void(function_decl.return_type.c_abi_name))
     {
         return "void";
     }
 
-    if (find_pointer_class_return(module_decl, function_decl) != nullptr)
+    if (find_pointer_class_return(all_modules, module_decl, function_decl) != nullptr)
     {
         return "object";
     }
 
     return wrapper_type_name(function_decl.return_type);
+}
+
+std::string wrapper_return_type(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
+{
+    const bool is_secondary_base_return = class_is_secondary_base(
+        std::vector<ModuleDecl>{module_decl}, function_decl.return_type.cpp_name);
+    if (function_decl.return_type.has_managed_converter() && !function_decl.return_type.managed_type_name.empty()
+        && !is_secondary_base_return)
+    {
+        return function_decl.return_type.managed_type_name;
+    }
+
+    return wrapper_return_type(std::vector<ModuleDecl>{module_decl}, module_decl, function_decl);
 }
 
 std::string default_variant_condition(std::size_t omitted, const std::vector<std::string>& has_value_expressions)
@@ -1082,6 +1143,31 @@ std::string managed_class_name(const ModuleDecl& module_decl, const ClassDecl& c
 std::string qualified_managed_class_name(const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
     return "global::" + csharp_namespace_name(module_decl, class_decl) + "." + managed_class_name(module_decl, class_decl);
+}
+
+std::string interface_name_for_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    return "I" + managed_class_name(module_decl, class_decl);
+}
+
+std::string qualified_interface_name_for_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+{
+    return "global::" + csharp_namespace_name(module_decl, class_decl) + "." + interface_name_for_class(module_decl, class_decl);
+}
+
+std::string translate_item_ownership_expression(
+    const ModuleDecl& source_module, const ModuleDecl& target_module, std::string_view expression)
+{
+    if (item_ownership_type_name(source_module) == item_ownership_type_name(target_module))
+    {
+        return std::string(expression);
+    }
+
+    return std::format("({} == {} ? {} : {})",
+        expression,
+        item_ownership_literal(source_module, true),
+        item_ownership_literal(target_module, true),
+        item_ownership_literal(target_module, false));
 }
 
 std::string managed_function_name(const ModuleDecl& module_decl, const FunctionDecl& function_decl)
@@ -2340,7 +2426,8 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
         const bool has_return_converter = !instantiation->return_type.managed_from_pinvoke_expression.empty();
         const bool has_return_finalize = !instantiation->return_type.managed_finalize_from_pinvoke_statement.empty();
         const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
-        const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, *instantiation);
+        const ClassBinding polymorphic_return_class =
+            find_pointer_class_return_binding(std::vector<ModuleDecl>{module_decl}, module_decl, *instantiation);
 
         if (return_type == "void")
         {
@@ -2455,7 +2542,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
         }
         else
         {
-            if (polymorphic_return_class != nullptr)
+            if (polymorphic_return_class.class_decl != nullptr)
             {
                 if (!needs_finally)
                 {
@@ -2465,9 +2552,10 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                         output.append_line_format("            {}", post_assignment);
                     }
                     output.append_line_format("            return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, {});",
-                        module_decl.name,
-                        polymorphic_return_class->name,
-                        item_ownership_literal(module_decl, false));
+                        polymorphic_return_class.module_decl->name,
+                        polymorphic_return_class.class_decl->name,
+                        translate_item_ownership_expression(module_decl, *polymorphic_return_class.module_decl,
+                            item_ownership_literal(module_decl, false)));
                 }
                 else
                 {
@@ -2479,9 +2567,10 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                         output.append_line_format("                {}", post_assignment);
                     }
                     output.append_line_format("                return {}Runtime.WrapPolymorphic_{}(__csbind23_result_ptr, {});",
-                        module_decl.name,
-                        polymorphic_return_class->name,
-                        item_ownership_literal(module_decl, false));
+                        polymorphic_return_class.module_decl->name,
+                        polymorphic_return_class.class_decl->name,
+                        translate_item_ownership_expression(module_decl, *polymorphic_return_class.module_decl,
+                            item_ownership_literal(module_decl, false)));
                     output.append_line("            }");
                     output.append_line("            finally");
                     output.append_line("            {");
@@ -2744,31 +2833,32 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
     output.append_line();
 }
 
-std::string interface_name_for_class(const ModuleDecl& module_decl, const ClassDecl& class_decl)
+bool is_primary_base_for_any_class(
+    const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl, const ClassDecl& candidate)
 {
-    return "I" + managed_class_name(module_decl, class_decl);
-}
-
-bool is_primary_base_for_any_class(const ModuleDecl& module_decl, const ClassDecl& candidate)
-{
-    for (const auto& class_decl : module_decl.classes)
+    (void)module_decl;
+    for (const auto& owning_module : all_modules)
     {
-        if (class_decl.cpp_name == candidate.cpp_name)
+        for (const auto& class_decl : owning_module.classes)
         {
-            continue;
-        }
+            if (class_decl.cpp_name == candidate.cpp_name)
+            {
+                continue;
+            }
 
-        const auto* primary_base = primary_base_class(module_decl, class_decl);
-        if (primary_base != nullptr && primary_base->cpp_name == candidate.cpp_name)
-        {
-            return true;
+            const auto primary_base = primary_base_class(all_modules, owning_module, class_decl);
+            if (primary_base.class_decl != nullptr && primary_base.class_decl->cpp_name == candidate.cpp_name)
+            {
+                return true;
+            }
         }
     }
 
     return false;
 }
 
-void append_interface_declaration(TextWriter& output, const ModuleDecl& module_decl, const ClassDecl& class_decl)
+void append_interface_declaration(TextWriter& output, const std::vector<ModuleDecl>& all_modules,
+    const ModuleDecl& module_decl, const ClassDecl& class_decl)
 {
     output.append_line_format("public interface {}", interface_name_for_class(module_decl, class_decl));
     output.append_line("{");
@@ -2781,7 +2871,7 @@ void append_interface_declaration(TextWriter& output, const ModuleDecl& module_d
 
         output.append_line_format(
             "    {} {}({});",
-            wrapper_return_type(module_decl, method_decl),
+            wrapper_return_type(all_modules, module_decl, method_decl),
             managed_method_name(module_decl, method_decl),
             parameter_list_without_self(method_decl));
     }
@@ -2789,11 +2879,12 @@ void append_interface_declaration(TextWriter& output, const ModuleDecl& module_d
     output.append_line();
 }
 
-bool module_has_virtual_callbacks(const ModuleDecl& module_decl)
+bool module_has_virtual_callbacks(const std::vector<ModuleDecl>& all_modules, const ModuleDecl& module_decl)
 {
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl, csharp_method_collection_options());
+        const auto emitted_methods =
+            collect_emitted_methods(all_modules, module_decl, class_decl, csharp_method_collection_options());
         const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
         if (!virtual_methods.empty())
         {
@@ -3048,7 +3139,8 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
         }
     }
 
-    const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, method_decl);
+    const ClassBinding polymorphic_return_class =
+        find_pointer_class_return_binding(std::vector<ModuleDecl>{module_decl}, module_decl, method_decl);
 
     if (return_type == "void")
     {
@@ -3075,12 +3167,16 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
         return;
     }
 
-    if (polymorphic_return_class != nullptr)
+    if (polymorphic_return_class.class_decl != nullptr)
     {
         const std::string native_result_name = "__csbind23_result_ptr";
         const std::string wrapped_result = std::format(
-            "{}Runtime.WrapPolymorphic_{}({}, {})", module_name, polymorphic_return_class->name, native_result_name,
-            item_ownership_literal(module_decl, false));
+            "{}Runtime.WrapPolymorphic_{}({}, {})",
+            polymorphic_return_class.module_decl->name,
+            polymorphic_return_class.class_decl->name,
+            native_result_name,
+            translate_item_ownership_expression(
+                module_decl, *polymorphic_return_class.module_decl, item_ownership_literal(module_decl, false)));
 
         if (!needs_finally)
         {
@@ -3416,29 +3512,31 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
     }
 }
 
-void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl)
+void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all_modules,
+    const ModuleDecl& module_decl, const std::string& module_name, const ClassDecl& class_decl)
 {
     const std::string managed_class = managed_class_name(module_decl, class_decl);
-    const ClassDecl* base_class = primary_base_class(module_decl, class_decl);
-    const bool has_base_class = base_class != nullptr;
+    const ClassBinding base_class = primary_base_class(all_modules, module_decl, class_decl);
+    const bool has_base_class = base_class.class_decl != nullptr;
     const bool emits_destroy = class_has_owned_ctor(class_decl);
-    const auto emitted_methods = collect_emitted_methods(module_decl, class_decl, csharp_method_collection_options());
+    const auto emitted_methods =
+        collect_emitted_methods(all_modules, module_decl, class_decl, csharp_method_collection_options());
     const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
     const bool has_virtual_support = !virtual_methods.empty();
-    const bool is_primary_base_class = is_primary_base_for_any_class(module_decl, class_decl);
+    const bool is_primary_base_class = is_primary_base_for_any_class(all_modules, module_decl, class_decl);
 
     std::vector<std::string> base_types;
     if (has_base_class)
     {
-        base_types.push_back(managed_class_name(module_decl, *base_class));
+        base_types.push_back(qualified_managed_class_name(*base_class.module_decl, *base_class.class_decl));
     }
     else
     {
         base_types.push_back("System.IDisposable");
     }
-    for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
+    for (const auto& secondary_base : secondary_base_classes(all_modules, module_decl, class_decl))
     {
-        base_types.push_back(interface_name_for_class(module_decl, *secondary_base));
+        base_types.push_back(qualified_interface_name_for_class(*secondary_base.module_decl, *secondary_base.class_decl));
     }
     for (const auto& interface_name : class_decl.csharp_interfaces)
     {
@@ -3478,7 +3576,8 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
     output.append_format("    internal {}(System.IntPtr handle, {} ownership)", managed_class, item_ownership_type_name(module_decl));
     if (has_base_class)
     {
-        output.append(" : base(handle, ownership)");
+        output.append_format(" : base(handle, {})",
+            translate_item_ownership_expression(module_decl, *base_class.module_decl, "ownership"));
     }
     output.append_line("");
     output.append_line("    {");
@@ -3515,7 +3614,9 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         output.append(")");
         if (has_base_class)
         {
-            output.append_format(" : base(System.IntPtr.Zero, {})", item_ownership_literal(module_decl, false));
+            output.append_format(" : base(System.IntPtr.Zero, {})",
+                translate_item_ownership_expression(
+                    module_decl, *base_class.module_decl, item_ownership_literal(module_decl, false)));
         }
         output.append_line("");
         output.append_line("    {");
@@ -3755,7 +3856,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         bool is_override = false;
         if (has_base_class)
         {
-            for (const auto& base_method : base_class->methods)
+            for (const auto& base_method : base_class.class_decl->methods)
             {
                 if (base_method.is_constructor || base_method.name != method_decl.name)
                 {
@@ -3808,7 +3909,7 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
         }
 
         std::string property_type = getter_decl != nullptr
-            ? wrapper_return_type(module_decl, *getter_decl)
+            ? wrapper_return_type(all_modules, module_decl, *getter_decl)
             : wrapper_type_name(property_decl.type);
 
         append_csharp_comment(output, "    ", property_decl.csharp_comment);
@@ -3853,7 +3954,9 @@ void append_wrapper_class(TextWriter& output, const ModuleDecl& module_decl, con
 } // namespace
 
 std::vector<std::filesystem::path> emit_csharp_module(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root)
+    const ModuleDecl& module_decl,
+    const std::vector<ModuleDecl>& all_modules,
+    const std::filesystem::path& output_root)
 {
     std::filesystem::create_directories(output_root);
 
@@ -3863,25 +3966,21 @@ std::vector<std::filesystem::path> emit_csharp_module(
     emit_shared_instance_cache_types_if_needed(module_decl, output_root, generated_files);
     emit_shared_array_interop_types_if_needed(module_decl, output_root, generated_files);
 
-    std::unordered_set<std::string> emitted_interfaces;
     for (const auto& class_decl : module_decl.classes)
     {
-        for (const auto* secondary_base : secondary_base_classes(module_decl, class_decl))
+        if (!class_is_secondary_base(all_modules, class_decl.cpp_name))
         {
-            if (!emitted_interfaces.insert(secondary_base->cpp_name).second)
-            {
-                continue;
-            }
-
-            TextWriter interface_file(512);
-            interface_file.append_line_format("namespace {};", csharp_namespace_name(module_decl, *secondary_base));
-            interface_file.append_line();
-            append_interface_declaration(interface_file, module_decl, *secondary_base);
-            generated_files.push_back(write_csharp_file(
-                output_root,
-                module_decl.name + "." + interface_name_for_class(module_decl, *secondary_base) + ".g.cs",
-                interface_file.str()));
+            continue;
         }
+
+        TextWriter interface_file(512);
+        interface_file.append_line_format("namespace {};", csharp_namespace_name(module_decl, class_decl));
+        interface_file.append_line();
+        append_interface_declaration(interface_file, all_modules, module_decl, class_decl);
+        generated_files.push_back(write_csharp_file(
+            output_root,
+            module_decl.name + "." + interface_name_for_class(module_decl, class_decl) + ".g.cs",
+            interface_file.str()));
     }
 
     TextWriter generated(3072);
@@ -3911,7 +4010,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& class_decl : module_decl.classes)
     {
-        const auto emitted_methods = collect_emitted_methods(module_decl, class_decl, csharp_method_collection_options());
+        const auto emitted_methods =
+            collect_emitted_methods(all_modules, module_decl, class_decl, csharp_method_collection_options());
         const auto virtual_methods = collect_virtual_methods(class_decl, emitted_methods);
 
         FunctionDecl type_name_decl;
@@ -4026,6 +4126,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     for (const auto& class_decl : module_decl.classes)
     {
+        const auto assignable_classes = polymorphic_assignable_classes(all_modules, class_decl.cpp_name);
         generated.append_line_format(
             "    internal static object WrapPolymorphic_{}(System.IntPtr handle, {} ownership)", class_decl.name,
             item_ownership_type_name(module_decl));
@@ -4040,17 +4141,37 @@ std::vector<std::filesystem::path> emit_csharp_module(
             module_decl.name,
             module_decl.name,
             class_decl.name);
-        generated.append_line("        if (dynamicTypeId >= 0 && dynamicTypeId < __csbind23_typeFactories.Length)");
+        generated.append_line("        switch (dynamicTypeId)");
         generated.append_line("        {");
-        generated.append_line_format(
-            "            System.IntPtr adjustedHandle = {}Native.{}_{}_cast(handle, dynamicTypeId);",
-            module_decl.name,
-            module_decl.name,
-            class_decl.name);
-        generated.append_line("            if (adjustedHandle != System.IntPtr.Zero)");
-        generated.append_line("            {");
-        generated.append_line("                return __csbind23_typeFactories[dynamicTypeId](adjustedHandle, ownership);");
-        generated.append_line("            }");
+        for (std::size_t index = 0; index < assignable_classes.size(); ++index)
+        {
+            const auto& assignable_class = assignable_classes[index];
+            generated.append_line_format("        case {}:", index);
+            generated.append_line("        {");
+            generated.append_line_format(
+                "            System.IntPtr adjustedHandle = {}Native.{}_{}_cast(handle, {});",
+                module_decl.name,
+                module_decl.name,
+                class_decl.name,
+                index);
+            generated.append_line("            if (adjustedHandle == System.IntPtr.Zero)");
+            generated.append_line("            {");
+            generated.append_line("                break;");
+            generated.append_line("            }");
+            if (assignable_class.class_decl->is_generic_instantiation)
+            {
+                generated.append_line("            return adjustedHandle;");
+            }
+            else
+            {
+                generated.append_line_format(
+                    "            return new {}(adjustedHandle, {});",
+                    qualified_managed_class_name(*assignable_class.module_decl, *assignable_class.class_decl),
+                    translate_item_ownership_expression(
+                        module_decl, *assignable_class.module_decl, "ownership"));
+            }
+            generated.append_line("        }");
+        }
         generated.append_line("        }");
         generated.append_line();
         if (class_decl.is_generic_instantiation)
@@ -4059,7 +4180,10 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         else
         {
-            generated.append_line_format("        return new {}(handle, ownership);", qualified_managed_class_name(module_decl, class_decl));
+            generated.append_line_format(
+                "        return new {}(handle, {});",
+                qualified_managed_class_name(module_decl, class_decl),
+                translate_item_ownership_expression(module_decl, module_decl, "ownership"));
         }
         generated.append_line("    }");
         generated.append_line();
@@ -4070,7 +4194,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     generated.append_line_format("public static class {}", csharp_api_class_name(module_decl));
     generated.append_line("{");
-    if (module_has_virtual_callbacks(module_decl))
+    if (module_has_virtual_callbacks(all_modules, module_decl))
     {
         generated.append_line("    internal static ulong __csbind23_DerivedClassHasMethod(");
         generated.append_line("        object instance,");
@@ -4111,7 +4235,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         append_csharp_attributes(generated, "    ", function_decl.csharp_attributes);
         append_csharp_comment(generated, "    ", function_decl.csharp_comment);
         const std::string params = free_function_parameter_list(module_decl, function_decl);
-        const std::string return_type = wrapper_return_type(module_decl, function_decl);
+        const std::string return_type = wrapper_return_type(all_modules, module_decl, function_decl);
         const std::string native_name = module_decl.name + "_" + exported_symbol_name(function_decl);
         const std::size_t defaults = free_function_default_count(module_decl, function_decl);
         const std::size_t optional_start = function_decl.parameters.size() - defaults;
@@ -4234,7 +4358,8 @@ std::vector<std::filesystem::path> emit_csharp_module(
             }
         }
 
-        const ClassDecl* polymorphic_return_class = find_pointer_class_return(module_decl, function_decl);
+        const ClassBinding polymorphic_return_class =
+            find_pointer_class_return_binding(all_modules, module_decl, function_decl);
 
         if (return_type == "void")
         {
@@ -4275,15 +4400,16 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
         else
         {
-            if (polymorphic_return_class != nullptr)
+            if (polymorphic_return_class.class_decl != nullptr)
             {
                 const std::string native_result_name = "__csbind23_result_ptr";
                 const std::string wrapped_result = std::format(
                     "{}Runtime.WrapPolymorphic_{}({}, {})",
-                    module_decl.name,
-                    polymorphic_return_class->name,
+                    polymorphic_return_class.module_decl->name,
+                    polymorphic_return_class.class_decl->name,
                     native_result_name,
-                    item_ownership_literal(module_decl, false));
+                    translate_item_ownership_expression(
+                        module_decl, *polymorphic_return_class.module_decl, item_ownership_literal(module_decl, false)));
 
                 if (!needs_finally)
                 {
@@ -4464,7 +4590,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
         TextWriter class_file(2048);
         class_file.append_line_format("namespace {};", csharp_namespace_name(module_decl, class_decl));
         class_file.append_line();
-        append_wrapper_class(class_file, module_decl, module_decl.name, class_decl);
+        append_wrapper_class(class_file, all_modules, module_decl, module_decl.name, class_decl);
 
         const auto& class_written = class_file.str();
         generated_files.push_back(
