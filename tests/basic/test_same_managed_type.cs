@@ -1,0 +1,32 @@
+using System;
+using System.Numerics;
+using CsBind23.Generated;
+using Xunit;
+
+namespace CsBind23.Tests.E2E;
+
+public class SameManagedTypeTests
+{
+    [Fact]
+    public void DifferentNativeTypes_Can_Share_SystemNumericsVector2()
+    {
+        Func<float, float, Vector2> makeVector2 = SameManagedTypeApi.make_vector2;
+        Func<float, float, Vector2> makeVec2 = SameManagedTypeApi.make_vec2;
+        Func<Vector2, Vector2, Vector2> addMixed = SameManagedTypeApi.add_mixed;
+        Func<Vector2, float, Vector2> scaleVec2 = SameManagedTypeApi.scale_vec2;
+
+        Vector2 fromMethods = makeVector2(1.0f, 2.0f);
+        Vector2 fromFields = makeVec2(3.0f, 4.0f);
+
+        Assert.Equal(new Vector2(1.0f, 2.0f), fromMethods);
+        Assert.Equal(new Vector2(3.0f, 4.0f), fromFields);
+        Assert.Equal(17.0f, SameManagedTypeApi.dot_vector2(fromMethods, new Vector2(5.0f, 6.0f)));
+        Assert.Equal(53.0f, SameManagedTypeApi.dot_vec2(fromFields, new Vector2(7.0f, 8.0f)));
+
+        Vector2 sum = addMixed(fromMethods, fromFields);
+        Assert.Equal(new Vector2(4.0f, 6.0f), sum);
+
+        Vector2 scaled = scaleVec2(sum, 0.5f);
+        Assert.Equal(new Vector2(2.0f, 3.0f), scaled);
+    }
+}
