@@ -69,9 +69,521 @@ constexpr std::string_view pinvoke_library_constant_name()
 {
     return "DllImportLibrary";
 }
+
 std::string wrapper_type_name(const TypeRef& type_ref);
 bool csharp_type_is_value_type(const ModuleDecl& module_decl, std::string_view type_name);
 
+std::string callable_create_export_name(const TypeRef& type_ref)
+{
+    return "__csbind23_create_callable_" + type_ref.callable_id;
+}
+
+std::string callable_invoke_export_name(const TypeRef& type_ref)
+{
+    return "__csbind23_invoke_callable_" + type_ref.callable_id;
+}
+
+std::string callable_release_export_name(const TypeRef& type_ref)
+{
+    return "__csbind23_release_callable_" + type_ref.callable_id;
+}
+
+std::string callable_delegate_name(const TypeRef& type_ref)
+{
+    return type_ref.managed_type_name.empty() ? "__csbind23_Delegate_" + type_ref.callable_id : type_ref.managed_type_name;
+}
+
+std::string callable_native_callback_delegate_name(const TypeRef& type_ref)
+{
+    return "__csbind23_NativeCallback_" + type_ref.callable_id;
+}
+
+std::string callable_native_release_delegate_name(const TypeRef& type_ref)
+{
+    return "__csbind23_NativeRelease_" + type_ref.callable_id;
+}
+
+std::string callable_create_native_method_name(const TypeRef& type_ref)
+{
+    return type_ref.is_function_pointer
+        ? "__csbind23_CreateNativeFunctionPointer_" + type_ref.callable_id
+        : "__csbind23_CreateNativeCallable_" + type_ref.callable_id;
+}
+
+std::string callable_create_managed_method_name(const TypeRef& type_ref)
+{
+    return type_ref.is_function_pointer
+        ? "__csbind23_CreateManagedFunctionPointer_" + type_ref.callable_id
+        : "__csbind23_CreateManagedCallable_" + type_ref.callable_id;
+}
+
+std::string callable_release_native_method_name(const TypeRef& type_ref)
+{
+    return "__csbind23_ReleaseNativeCallable_" + type_ref.callable_id;
+}
+
+std::string callable_managed_invoke_method_name(const TypeRef& type_ref)
+{
+    return "__csbind23_InvokeManagedCallable_" + type_ref.callable_id;
+}
+
+std::string callable_managed_release_method_name(const TypeRef& type_ref)
+{
+    return "__csbind23_ReleaseManagedCallable_" + type_ref.callable_id;
+}
+
+void collect_callable_types(const TypeRef& type_ref, std::unordered_set<std::string>& seen, std::vector<const TypeRef*>& callables)
+{
+    if (type_ref.callable_signature == nullptr)
+    {
+        return;
+    }
+
+    const std::string key = std::format("{}:{}", type_ref.is_std_function ? "std" : "fn", type_ref.callable_id);
+    if (seen.insert(key).second)
+    {
+        callables.push_back(&type_ref);
+    }
+
+    collect_callable_types(type_ref.callable_signature->return_type, seen, callables);
+    for (const auto& parameter_type : type_ref.callable_signature->parameter_types)
+    {
+        collect_callable_types(parameter_type, seen, callables);
+    }
+}
+
+std::vector<const TypeRef*> collect_module_callable_types(const ModuleDecl& module_decl)
+{
+    std::unordered_set<std::string> seen;
+    std::vector<const TypeRef*> callables;
+
+    for (const auto& function_decl : module_decl.functions)
+    {
+        collect_callable_types(function_decl.return_type, seen, callables);
+        for (const auto& parameter : function_decl.parameters)
+        {
+            collect_callable_types(parameter.type, seen, callables);
+        }
+    }
+
+    for (const auto& class_decl : module_decl.classes)
+    {
+        for (const auto& method_decl : class_decl.methods)
+        {
+            collect_callable_types(method_decl.return_type, seen, callables);
+            for (const auto& parameter : method_decl.parameters)
+            {
+                collect_callable_types(parameter.type, seen, callables);
+            }
+        }
+    }
+
+    return callables;
+}
+
+std::string callable_signature_byref_keyword(const TypeRef& type_ref)
+{
+    return (type_ref.is_reference && !type_ref.is_const) ? "ref " : std::string{};
+}
+
+std::string callable_pinvoke_byref_keyword(const TypeRef& type_ref)
+{
+    return (type_ref.is_reference && !type_ref.is_const && type_ref.managed_to_pinvoke_expression.empty())
+        ? "ref "
+        : std::string{};
+}
+
+std::string callable_argument_name(std::size_t index)
+{
+    return std::format("arg{}", index);
+}
+
+void append_callable_delegate_definition(TextWriter& output, const TypeRef& type_ref)
+{
+    if (type_ref.callable_signature == nullptr)
+    {
+        return;
+    }
+
+    const auto& signature = *type_ref.callable_signature;
+    output.append_format("public delegate {} {}(", wrapper_type_name(signature.return_type), callable_delegate_name(type_ref));
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        output.append_format(
+            "{}{} {}",
+            callable_signature_byref_keyword(parameter_type),
+            wrapper_type_name(parameter_type),
+            callable_argument_name(index));
+        if (index + 1 < signature.parameter_types.size())
+        {
+            output.append(", ");
+        }
+    }
+    output.append_line(");");
+    output.append_line();
+}
+
+void append_callable_support(TextWriter& output, const ModuleDecl& module_decl, const TypeRef& type_ref)
+{
+    if (type_ref.callable_signature == nullptr)
+    {
+        return;
+    }
+
+    const auto& signature = *type_ref.callable_signature;
+    const std::string delegate_name = callable_delegate_name(type_ref);
+
+    if (type_ref.is_function_pointer)
+    {
+        output.append_line_format("    internal static System.IntPtr {}({} value)", callable_create_native_method_name(type_ref), delegate_name);
+        output.append_line("    {");
+        output.append_line("        return value is null ? System.IntPtr.Zero : global::CsBind23.Generated.CsBind23DelegateRegistry.RegisterFunctionPointer(value);");
+        output.append_line("    }");
+        output.append_line();
+
+        output.append_line_format("    internal static {} {}(System.IntPtr value)", delegate_name, callable_create_managed_method_name(type_ref));
+        output.append_line("    {");
+        output.append_line_format(
+            "        return value == System.IntPtr.Zero ? null! : System.Runtime.InteropServices.Marshal.GetDelegateForFunctionPointer<{}>(value);",
+            delegate_name);
+        output.append_line("    }");
+        output.append_line();
+        return;
+    }
+
+    output.append_line("    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.Cdecl)]");
+    output.append_format(
+        "    private delegate {} {}(System.IntPtr context",
+        signature.return_type.pinvoke_name,
+        callable_native_callback_delegate_name(type_ref));
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        output.append_format(", {}{} {}", callable_pinvoke_byref_keyword(parameter_type), parameter_type.pinvoke_name, callable_argument_name(index));
+    }
+    output.append_line(");");
+    output.append_line("    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.Cdecl)]");
+    output.append_line_format("    private delegate void {}(System.IntPtr context);", callable_native_release_delegate_name(type_ref));
+    output.append_line_format(
+        "    private static readonly {} __csbind23_staticCallableThunk_{} = {};",
+        callable_native_callback_delegate_name(type_ref),
+        type_ref.callable_id,
+        callable_managed_invoke_method_name(type_ref));
+    output.append_line_format(
+        "    private static readonly System.IntPtr __csbind23_staticCallableThunkPtr_{} = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(__csbind23_staticCallableThunk_{});",
+        type_ref.callable_id,
+        type_ref.callable_id);
+    output.append_line_format(
+        "    private static readonly {} __csbind23_staticCallableRelease_{} = {};",
+        callable_native_release_delegate_name(type_ref),
+        type_ref.callable_id,
+        callable_managed_release_method_name(type_ref));
+    output.append_line_format(
+        "    private static readonly System.IntPtr __csbind23_staticCallableReleasePtr_{} = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(__csbind23_staticCallableRelease_{});",
+        type_ref.callable_id,
+        type_ref.callable_id);
+    output.append_line();
+
+    output.append_line_format(
+        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]",
+        pinvoke_library_constant_name());
+    output.append_line_format(
+        "    internal static extern System.IntPtr {}_{}(System.IntPtr functionPtr, System.IntPtr managedLifetime, System.IntPtr release);",
+        module_decl.name,
+        callable_create_export_name(type_ref));
+    output.append_line_format(
+        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]",
+        pinvoke_library_constant_name());
+    output.append_format(
+        "    internal static extern {} {}_{}(System.IntPtr callable",
+        signature.return_type.pinvoke_name,
+        module_decl.name,
+        callable_invoke_export_name(type_ref));
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        output.append_format(", {}{} {}", callable_pinvoke_byref_keyword(parameter_type), parameter_type.pinvoke_name, callable_argument_name(index));
+    }
+    output.append_line(");");
+    output.append_line_format(
+        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]",
+        pinvoke_library_constant_name());
+    output.append_line_format(
+        "    internal static extern void {}_{}(System.IntPtr callable);",
+        module_decl.name,
+        callable_release_export_name(type_ref));
+    output.append_line();
+
+    output.append_line_format("    internal static System.IntPtr {}({} value)", callable_create_native_method_name(type_ref), delegate_name);
+    output.append_line("    {");
+    output.append_line("        if (value is null)");
+    output.append_line("        {");
+    output.append_line("            return System.IntPtr.Zero;");
+    output.append_line("        }");
+    output.append_line("        System.IntPtr lifetime = global::CsBind23.Generated.CsBind23DelegateRegistry.CreateLifetimeHandle(value);");
+    output.append_line("        try");
+    output.append_line("        {");
+    output.append_line_format(
+        "            return {}_{}(__csbind23_staticCallableThunkPtr_{}, lifetime, __csbind23_staticCallableReleasePtr_{});",
+        module_decl.name,
+        callable_create_export_name(type_ref),
+        type_ref.callable_id,
+        type_ref.callable_id);
+    output.append_line("        }");
+    output.append_line("        catch");
+    output.append_line("        {");
+    output.append_line("            global::CsBind23.Generated.CsBind23DelegateRegistry.FreeLifetimeHandle(lifetime);");
+    output.append_line("            throw;");
+    output.append_line("        }");
+    output.append_line("    }");
+    output.append_line();
+
+    output.append_line_format("    internal static {} {}(System.IntPtr value)", delegate_name, callable_create_managed_method_name(type_ref));
+    output.append_line("    {");
+    output.append_line("        if (value == System.IntPtr.Zero)");
+    output.append_line("        {");
+    output.append_line("            return null!;");
+    output.append_line("        }");
+    output.append_line_format(
+        "        var __csbind23_owner = new global::CsBind23.Generated.CsBind23NativeDelegateHandle(value, {});",
+        callable_release_native_method_name(type_ref));
+    output.append_format("        {} __csbind23_delegate = (", delegate_name);
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        output.append_format(
+            "{}{} {}",
+            callable_signature_byref_keyword(parameter_type),
+            wrapper_type_name(parameter_type),
+            callable_argument_name(index));
+        if (index + 1 < signature.parameter_types.size())
+        {
+            output.append(", ");
+        }
+    }
+    output.append_line(") =>");
+    output.append_line("        {");
+
+    std::vector<std::string> call_arguments;
+    std::vector<std::string> finalize_statements;
+    call_arguments.reserve(signature.parameter_types.size());
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        const std::string arg_name = callable_argument_name(index);
+        if (!parameter_type.managed_to_pinvoke_expression.empty())
+        {
+            const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
+            append_embedded_assignment(
+                output,
+                "            ",
+                std::format("{} {} = ", parameter_type.pinvoke_name, pinvoke_name),
+                render_inline_template(parameter_type.managed_to_pinvoke_expression, arg_name, pinvoke_name, arg_name, native_class_name(module_decl)));
+            call_arguments.push_back(pinvoke_name);
+            if (!parameter_type.managed_finalize_to_pinvoke_statement.empty())
+            {
+                finalize_statements.push_back(render_inline_template(
+                    parameter_type.managed_finalize_to_pinvoke_statement,
+                    arg_name,
+                    pinvoke_name,
+                    pinvoke_name,
+                    native_class_name(module_decl)));
+            }
+        }
+        else
+        {
+            call_arguments.push_back(arg_name);
+        }
+    }
+
+    const std::string invoke_call = std::format(
+        "{}_{}({})",
+        module_decl.name,
+        callable_invoke_export_name(type_ref),
+        join_arguments([&] {
+            std::vector<std::string> args;
+            args.reserve(call_arguments.size() + 1);
+            args.push_back("value");
+            args.insert(args.end(), call_arguments.begin(), call_arguments.end());
+            return args;
+        }()));
+    const bool has_return_converter = !signature.return_type.managed_from_pinvoke_expression.empty();
+    const bool has_return_finalize = !signature.return_type.managed_finalize_from_pinvoke_statement.empty();
+    const bool needs_finally = !finalize_statements.empty() || has_return_finalize;
+
+    if (wrapper_type_name(signature.return_type) == "void")
+    {
+        if (!needs_finally)
+        {
+            output.append_line_format("            {} ;", invoke_call);
+        }
+        else
+        {
+            output.append_line("            try");
+            output.append_line("            {");
+            output.append_line_format("                {} ;", invoke_call);
+            output.append_line("            }");
+            output.append_line("            finally");
+            output.append_line("            {");
+            for (const auto& finalize_statement : finalize_statements)
+            {
+                append_embedded_statement(output, "                ", finalize_statement);
+            }
+            output.append_line("            }");
+        }
+    }
+    else if (!has_return_converter)
+    {
+        if (!needs_finally)
+        {
+            output.append_line_format("            return {} ;", invoke_call);
+        }
+        else
+        {
+            output.append_line("            try");
+            output.append_line("            {");
+            output.append_line_format("                return {} ;", invoke_call);
+            output.append_line("            }");
+            output.append_line("            finally");
+            output.append_line("            {");
+            for (const auto& finalize_statement : finalize_statements)
+            {
+                append_embedded_statement(output, "                ", finalize_statement);
+            }
+            output.append_line("            }");
+        }
+    }
+    else
+    {
+        const std::string native_result_name = "__csbind23_result_pinvoke";
+        const std::string managed_result_name = "__csbind23_result_managed";
+        const std::string converted_expression = render_inline_template(
+            signature.return_type.managed_from_pinvoke_expression,
+            managed_result_name,
+            native_result_name,
+            native_result_name,
+            native_class_name(module_decl));
+        if (!needs_finally)
+        {
+            output.append_line_format("            {} {} = {} ;", signature.return_type.pinvoke_name, native_result_name, invoke_call);
+            append_embedded_assignment(
+                output,
+                "            ",
+                std::format("{} {} = ", wrapper_type_name(signature.return_type), managed_result_name),
+                converted_expression);
+            output.append_line_format("            return {} ;", managed_result_name);
+        }
+        else
+        {
+            output.append_line_format("            {} {} = default!;", signature.return_type.pinvoke_name, native_result_name);
+            output.append_line_format("            {} {} = default!;", wrapper_type_name(signature.return_type), managed_result_name);
+            output.append_line("            try");
+            output.append_line("            {");
+            output.append_line_format("                {} = {} ;", native_result_name, invoke_call);
+            append_embedded_assignment(output, "                ", std::format("{} = ", managed_result_name), converted_expression);
+            output.append_line_format("                return {} ;", managed_result_name);
+            output.append_line("            }");
+            output.append_line("            finally");
+            output.append_line("            {");
+            for (const auto& finalize_statement : finalize_statements)
+            {
+                append_embedded_statement(output, "                ", finalize_statement);
+            }
+            if (has_return_finalize)
+            {
+                append_embedded_statement(output, "                ", render_inline_template(
+                    signature.return_type.managed_finalize_from_pinvoke_statement,
+                    managed_result_name,
+                    native_result_name,
+                    native_result_name,
+                    native_class_name(module_decl)));
+            }
+            output.append_line("            }");
+        }
+    }
+
+    output.append_line("        };");
+    output.append_line("        global::CsBind23.Generated.CsBind23DelegateRegistry.AttachNativeOwner(__csbind23_delegate, __csbind23_owner);");
+    output.append_line("        return __csbind23_delegate;");
+    output.append_line("    }");
+    output.append_line();
+
+    output.append_format(
+        "    private static {} {}(System.IntPtr context",
+        signature.return_type.pinvoke_name,
+        callable_managed_invoke_method_name(type_ref));
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        output.append_format(", {}{} {}", callable_pinvoke_byref_keyword(parameter_type), parameter_type.pinvoke_name, callable_argument_name(index));
+    }
+    output.append_line(")");
+    output.append_line("    {");
+    output.append_line("        var __csbind23_handle = System.Runtime.InteropServices.GCHandle.FromIntPtr(context);");
+    output.append_line_format("        var __csbind23_callback = ({})__csbind23_handle.Target!;", delegate_name);
+
+    std::vector<std::string> managed_args;
+    managed_args.reserve(signature.parameter_types.size());
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        const auto& parameter_type = signature.parameter_types[index];
+        const std::string arg_name = callable_argument_name(index);
+        if (!parameter_type.managed_from_pinvoke_expression.empty())
+        {
+            const std::string managed_name = std::format("__csbind23_arg{}_managed", index);
+            append_embedded_assignment(
+                output,
+                "        ",
+                std::format("{} {} = ", wrapper_type_name(parameter_type), managed_name),
+                render_inline_template(parameter_type.managed_from_pinvoke_expression, managed_name, arg_name, arg_name, native_class_name(module_decl)));
+            managed_args.push_back(managed_name);
+        }
+        else
+        {
+            managed_args.push_back(arg_name);
+        }
+    }
+
+    const std::string managed_invoke_call = std::format("__csbind23_callback({})", join_arguments(managed_args));
+    if (wrapper_type_name(signature.return_type) == "void")
+    {
+        output.append_line_format("        {} ;", managed_invoke_call);
+        output.append_line("        return;");
+    }
+    else if (!signature.return_type.managed_to_pinvoke_expression.empty())
+    {
+        output.append_line_format("        {} __csbind23_result = {} ;", wrapper_type_name(signature.return_type), managed_invoke_call);
+        append_embedded_return(output, "        ", render_inline_template(
+            signature.return_type.managed_to_pinvoke_expression,
+            "__csbind23_result",
+            "__csbind23_result",
+            "__csbind23_result",
+            native_class_name(module_decl)));
+    }
+    else
+    {
+        output.append_line_format("        return {} ;", managed_invoke_call);
+    }
+    output.append_line("    }");
+    output.append_line();
+
+    output.append_line_format("    private static void {}(System.IntPtr context)", callable_managed_release_method_name(type_ref));
+    output.append_line("    {");
+    output.append_line("        global::CsBind23.Generated.CsBind23DelegateRegistry.FreeLifetimeHandle(context);");
+    output.append_line("    }");
+    output.append_line();
+
+    output.append_line_format("    internal static void {}(System.IntPtr callable)", callable_release_native_method_name(type_ref));
+    output.append_line("    {");
+    output.append_line("        if (callable == System.IntPtr.Zero)");
+    output.append_line("        {");
+    output.append_line("            return;");
+    output.append_line("        }");
+    output.append_line_format("        {}_{}(callable);", module_decl.name, callable_release_export_name(type_ref));
+    output.append_line("    }");
+    output.append_line();
+}
 std::filesystem::path write_csharp_file(
     const std::filesystem::path& output_root, const std::string& filename, const std::string& content)
 {
@@ -4013,6 +4525,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::filesystem::create_directories(output_root);
 
     std::vector<std::filesystem::path> generated_files;
+    const auto callable_types = collect_module_callable_types(module_decl);
 
     for (const auto& class_decl : module_decl.classes)
     {
@@ -4132,6 +4645,11 @@ std::vector<std::filesystem::path> emit_csharp_module(
         }
     }
 
+    for (const auto* callable_type : callable_types)
+    {
+        append_callable_support(generated, module_decl, *callable_type);
+    }
+
     generated.append_line("}");
     generated.append_line();
 
@@ -4244,6 +4762,11 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
         generated.append_line("}");
         generated.append_line();
+    }
+
+    for (const auto* callable_type : callable_types)
+    {
+        append_callable_delegate_definition(generated, *callable_type);
     }
 
     generated.append_line_format("public static class {}", csharp_api_class_name(module_decl));

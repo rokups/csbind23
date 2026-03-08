@@ -1,6 +1,7 @@
 #pragma once
 
 #include "csbind23/cabi/converter.hpp"
+#include "csbind23/detail/callable_traits.hpp"
 #include "csbind23/detail/converter_internal.hpp"
 #include "csbind23/ir.hpp"
 
@@ -205,6 +206,11 @@ template <typename Type> std::string base_type_name()
 template <typename Type> std::string cpp_type_name()
 {
     TypeRef type_ref = make_type_ref<Type>();
+    if (!type_ref.cpp_full_type.empty())
+    {
+        return type_ref.cpp_full_type;
+    }
+
     std::string full_name;
 
     if (type_ref.is_const)
@@ -237,6 +243,7 @@ template <typename Type> TypeRef make_param_type_ref()
     TypeRef type_ref;
     using NoRef = std::remove_reference_t<Type>;
     type_ref.cpp_name = base_type_name<Type>();
+    type_ref.cpp_full_type = qualified_type_name<Type>();
     type_ref.c_abi_name = cabi::detail::c_abi_param_type_name_for<Type>();
     type_ref.pinvoke_name = cabi::detail::pinvoke_param_type_name_for<Type>();
     type_ref.is_pointer = std::is_pointer_v<NoRef>;
@@ -257,6 +264,7 @@ template <typename Type> TypeRef make_return_type_ref()
     TypeRef type_ref;
     using NoRef = std::remove_reference_t<Type>;
     type_ref.cpp_name = base_type_name<Type>();
+    type_ref.cpp_full_type = qualified_type_name<Type>();
     type_ref.c_abi_name = cabi::detail::c_abi_return_type_name_for<Type>();
     type_ref.pinvoke_name = cabi::detail::pinvoke_return_type_name_for<Type>();
     type_ref.is_pointer = std::is_pointer_v<NoRef>;

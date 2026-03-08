@@ -660,6 +660,17 @@ struct Converter<const std::array<Type, Extent>*>
     static cpp_type from_c_abi(c_abi_type value) { return static_cast<cpp_type>(value); }
 };
 
+template <typename ReturnType, typename... Args>
+struct Converter<ReturnType (*)(Args...)>
+{
+    using cpp_type = ReturnType (*)(Args...);
+    using c_abi_type = cpp_type;
+
+    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static c_abi_type to_c_abi(cpp_type value) { return value; }
+    static cpp_type from_c_abi(c_abi_type value) { return value; }
+};
+
 template <typename Type>
     requires(std::is_arithmetic_v<std::remove_cv_t<Type>> || std::is_enum_v<std::remove_cv_t<Type>>)
 struct Converter<Type*>

@@ -7,6 +7,11 @@ namespace csbind23::emit
 
 std::string render_cpp_type(const TypeRef& type_ref)
 {
+    if (!type_ref.cpp_full_type.empty())
+    {
+        return type_ref.cpp_full_type;
+    }
+
     std::string rendered;
     if (type_ref.is_const)
     {

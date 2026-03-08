@@ -18,38 +18,219 @@ namespace csbind23::emit
 namespace
 {
 
-void append_function_signature(
-    TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, std::size_t parameter_count)
+std::string callable_create_export_name(const TypeRef& type_ref)
 {
-    output.append_format("extern \"C\" {} {}(", function_decl.return_type.c_abi_name, exported_name);
+    return "__csbind23_create_callable_" + type_ref.callable_id;
+}
 
-    const auto parameters = leading_parameters(function_decl, parameter_count);
-    for (std::size_t index = 0; index < parameters.size(); ++index)
+std::string callable_invoke_export_name(const TypeRef& type_ref)
+{
+    return "__csbind23_invoke_callable_" + type_ref.callable_id;
+}
+
+std::string callable_release_export_name(const TypeRef& type_ref)
+{
+    return "__csbind23_release_callable_" + type_ref.callable_id;
+}
+
+std::string callable_managed_typedef_name(const TypeRef& type_ref)
+{
+    return "__csbind23_ManagedCallable_" + type_ref.callable_id;
+}
+
+std::string render_c_abi_declaration(const TypeRef& type_ref, std::string_view name)
+{
+    const std::string type_name = type_ref.is_function_pointer && !type_ref.cpp_full_type.empty()
+        ? type_ref.cpp_full_type
+        : type_ref.c_abi_name;
+
+    if (!type_ref.is_function_pointer)
     {
-        const auto& parameter = parameters[index];
-        output.append_format("{} {}", parameter.type.c_abi_name, parameter.name);
-        if (index + 1 < parameters.size())
+        return std::string(name).empty() ? type_name : std::format("{} {}", type_name, name);
+    }
+
+    std::string rendered = type_name;
+    const std::size_t function_ptr_pos = rendered.find("(*)");
+    if (function_ptr_pos != std::string::npos)
+    {
+        rendered.replace(function_ptr_pos, 3, std::format("(*{})", name));
+        return rendered;
+    }
+
+    return std::format("{} {}", rendered, name);
+}
+
+std::string callable_cpp_template_args(const TypeRef& type_ref)
+{
+    const auto& signature = *type_ref.callable_signature;
+    std::string rendered = render_cpp_type(signature.return_type);
+    for (const auto& parameter_type : signature.parameter_types)
+    {
+        rendered += ", ";
+        rendered += render_cpp_type(parameter_type);
+    }
+    return rendered;
+}
+
+void collect_callable_types(const TypeRef& type_ref, std::unordered_set<std::string>& seen, std::vector<const TypeRef*>& callables)
+{
+    if (type_ref.callable_signature == nullptr)
+    {
+        return;
+    }
+
+    const std::string key = std::format("{}:{}", type_ref.is_std_function ? "std" : "fn", type_ref.callable_id);
+    if (seen.insert(key).second)
+    {
+        callables.push_back(&type_ref);
+    }
+
+    collect_callable_types(type_ref.callable_signature->return_type, seen, callables);
+    for (const auto& parameter_type : type_ref.callable_signature->parameter_types)
+    {
+        collect_callable_types(parameter_type, seen, callables);
+    }
+}
+
+std::vector<const TypeRef*> collect_module_callable_types(const ModuleDecl& module_decl)
+{
+    std::unordered_set<std::string> seen;
+    std::vector<const TypeRef*> callables;
+
+    for (const auto& function_decl : module_decl.functions)
+    {
+        collect_callable_types(function_decl.return_type, seen, callables);
+        for (const auto& parameter : function_decl.parameters)
         {
-            output.append(", ");
+            collect_callable_types(parameter.type, seen, callables);
         }
     }
 
-    output.append(")");
+    for (const auto& class_decl : module_decl.classes)
+    {
+        for (const auto& method_decl : class_decl.methods)
+        {
+            collect_callable_types(method_decl.return_type, seen, callables);
+            for (const auto& parameter : method_decl.parameters)
+            {
+                collect_callable_types(parameter.type, seen, callables);
+            }
+        }
+    }
+
+    return callables;
+}
+
+void append_std_function_callable_exports(TextWriter& output, const std::string& module_name, const TypeRef& type_ref)
+{
+    if (!type_ref.is_std_function || type_ref.callable_signature == nullptr)
+    {
+        return;
+    }
+
+    const auto& signature = *type_ref.callable_signature;
+    const std::string typedef_name = callable_managed_typedef_name(type_ref);
+    output.append_format("using {} = {} (*)(void* __csbind23_context", typedef_name, signature.return_type.c_abi_name);
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        output.append(", ");
+        output.append(render_c_abi_declaration(signature.parameter_types[index], std::format("arg{}", index)));
+        if (index + 1 < signature.parameter_types.size())
+        {
+            // separator already emitted before each declarator
+        }
+    }
+    output.append_line(");");
+    output.append_line();
+
+    output.append_line_format(
+        "extern \"C\" void* {}_{}(void* function_ptr, void* managed_lifetime, void (*release)(void*)) {{",
+        module_name,
+        callable_create_export_name(type_ref));
+    output.append_line_format(
+        "    return csbind23::cabi::detail::create_managed_std_function_bridge<{}>(reinterpret_cast<{}>(function_ptr), managed_lifetime, release);",
+        callable_cpp_template_args(type_ref),
+        typedef_name);
+    output.append_line("}");
+    output.append_line();
+
+    std::string invoke_parameter_list = "void* callable";
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        invoke_parameter_list += ", ";
+        invoke_parameter_list += render_c_abi_declaration(signature.parameter_types[index], std::format("arg{}", index));
+    }
+    output.append_line_format(
+        "extern \"C\" {} {{",
+        render_c_abi_declaration(
+            signature.return_type,
+            module_name + "_" + callable_invoke_export_name(type_ref) + "(" + invoke_parameter_list + ")"));
+    std::string invoke_args = "callable";
+    for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
+    {
+        invoke_args += std::format(", arg{}", index);
+    }
+    if (signature.return_type.c_abi_name == "void")
+    {
+        output.append_line_format(
+            "    csbind23::cabi::detail::invoke_std_function_bridge<{}>({});",
+            callable_cpp_template_args(type_ref),
+            invoke_args);
+    }
+    else
+    {
+        output.append_line_format(
+            "    return csbind23::cabi::detail::invoke_std_function_bridge<{}>({});",
+            callable_cpp_template_args(type_ref),
+            invoke_args);
+    }
+    output.append_line("}");
+    output.append_line();
+
+    output.append_line_format(
+        "extern \"C\" void {}_{}(void* callable) {{",
+        module_name,
+        callable_release_export_name(type_ref));
+    output.append_line_format(
+        "    csbind23::cabi::detail::release_std_function_bridge<{}>(callable);",
+        callable_cpp_template_args(type_ref));
+    output.append_line("}");
+    output.append_line();
+}
+
+void append_function_signature(
+    TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, std::size_t parameter_count)
+{
+    const auto parameters = leading_parameters(function_decl, parameter_count);
+    std::string parameter_list;
+    for (std::size_t index = 0; index < parameters.size(); ++index)
+    {
+        const auto& parameter = parameters[index];
+        parameter_list += render_c_abi_declaration(parameter.type, parameter.name);
+        if (index + 1 < parameters.size())
+        {
+            parameter_list += ", ";
+        }
+    }
+    output.append_format(
+        "extern \"C\" {}",
+        render_c_abi_declaration(function_decl.return_type, exported_name + "(" + parameter_list + ")"));
 }
 
 void append_method_signature(
     TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, std::size_t parameter_count)
 {
     const char* self_type = function_decl.is_const ? "const void*" : "void*";
-    output.append_format("extern \"C\" {} {}({} self", function_decl.return_type.c_abi_name, exported_name, self_type);
-
     const auto parameters = leading_parameters(function_decl, parameter_count);
+    std::string parameter_list = std::format("{} self", self_type);
     for (const auto& parameter : parameters)
     {
-        output.append_format(", {} {}", parameter.type.c_abi_name, parameter.name);
+        parameter_list += ", ";
+        parameter_list += render_c_abi_declaration(parameter.type, parameter.name);
     }
-
-    output.append(")");
+    output.append_format(
+        "extern \"C\" {}",
+        render_c_abi_declaration(function_decl.return_type, exported_name + "(" + parameter_list + ")"));
 }
 
 void append_free_function_body(TextWriter& output, const FunctionDecl& function_decl, std::size_t parameter_count)
@@ -77,7 +258,8 @@ void append_virtual_callback_typedef(
     output.append_format("using {} = {} (*)({} self", typedef_name, method_decl.return_type.c_abi_name, self_type);
     for (const auto& parameter : method_decl.parameters)
     {
-        output.append_format(", {} {}", parameter.type.c_abi_name, parameter.name);
+        output.append(", ");
+        output.append(render_c_abi_declaration(parameter.type, parameter.name));
     }
     output.append_line(");");
 }
@@ -421,7 +603,9 @@ std::vector<std::filesystem::path> emit_cabi_module(
         #include <csbind23/cabi/converter.hpp>
         #include <csbind23/detail/converter_internal.hpp>
         #include <csbind23/detail/temporary_memory_allocator.hpp>
+        #include <csbind23/std/functional.hpp>
         #include <cstddef>
+        #include <functional>
         #include <type_traits>
         #include <typeinfo>
     )cpp");
@@ -459,6 +643,11 @@ std::vector<std::filesystem::path> emit_cabi_module(
             return nullptr;
         }
     )cpp");
+
+    for (const auto* callable_type : collect_module_callable_types(module_decl))
+    {
+        append_std_function_callable_exports(generated, module_decl.name, *callable_type);
+    }
 
     for (const auto& function_decl : module_decl.functions)
     {

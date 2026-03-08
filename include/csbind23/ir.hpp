@@ -5,11 +5,14 @@
 #include <cstdint>
 #include <limits>
 #include <functional>
+#include <memory>
 #include <string_view>
 #include <vector>
 
 namespace csbind23
 {
+
+struct CallableSignatureDecl;
 
 inline constexpr std::string_view stl_module_name()
 {
@@ -94,6 +97,7 @@ enum class Ownership
 struct TypeRef
 {
     std::string cpp_name;
+    std::string cpp_full_type;
     std::string c_abi_name;
     std::string pinvoke_name;
     std::string managed_type_name;
@@ -102,10 +106,14 @@ struct TypeRef
     std::string managed_from_pinvoke_expression;
     std::string managed_finalize_to_pinvoke_statement;
     std::string managed_finalize_from_pinvoke_statement;
+    std::string callable_id;
     std::size_t managed_array_fixed_extent = std::numeric_limits<std::size_t>::max();
     bool is_const = false;
     bool is_pointer = false;
     bool is_reference = false;
+    bool is_function_pointer = false;
+    bool is_std_function = false;
+    std::shared_ptr<CallableSignatureDecl> callable_signature;
 
     bool has_fixed_managed_array_extent() const
     {
@@ -114,10 +122,16 @@ struct TypeRef
 
     bool has_managed_converter() const
     {
-        return !managed_type_name.empty() || !managed_to_pinvoke_expression.empty()
+        return callable_signature != nullptr || !managed_type_name.empty() || !managed_to_pinvoke_expression.empty()
             || !managed_from_pinvoke_expression.empty() || !managed_finalize_to_pinvoke_statement.empty()
             || !managed_finalize_from_pinvoke_statement.empty();
     }
+};
+
+struct CallableSignatureDecl
+{
+    TypeRef return_type;
+    std::vector<TypeRef> parameter_types;
 };
 
 struct ParameterDecl

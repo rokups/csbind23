@@ -330,6 +330,7 @@ public:
     {
         TypeRef type_ref = detail::make_param_type_ref<Type>();
         apply_managed_converter<Type>(type_ref, current_module, false);
+        assign_callable_metadata<Type>(type_ref, current_module);
         return type_ref;
     }
 
@@ -337,6 +338,7 @@ public:
     {
         TypeRef type_ref = detail::make_return_type_ref<Type>();
         apply_managed_converter<Type>(type_ref, current_module, true);
+        assign_callable_metadata<Type>(type_ref, current_module);
         return type_ref;
     }
 
@@ -383,6 +385,89 @@ private:
             using element_type = typename FixedManagedArrayTraits<bare_type>::element_type;
             type_ref.managed_array_element_type_name = cabi::detail::managed_array_element_type_name<element_type>();
             type_ref.managed_array_fixed_extent = FixedManagedArrayTraits<bare_type>::extent;
+        }
+    }
+
+    static std::string callable_signature_hash(std::string_view text)
+    {
+        std::uint64_t hash = 1469598103934665603ull;
+        for (const unsigned char ch : text)
+        {
+            hash ^= static_cast<std::uint64_t>(ch);
+            hash *= 1099511628211ull;
+        }
+
+        return std::format("{:016X}", hash);
+    }
+
+    template <typename Type> static std::string callable_signature_text()
+    {
+        using traits = detail::callable_traits_t<Type>;
+        using args_tuple = typename traits::args_tuple;
+
+        std::string text = detail::qualified_type_name<typename traits::return_type>();
+        text += "(";
+        [&]<std::size_t... Indices>(std::index_sequence<Indices...>) {
+            ((text += (Indices == 0 ? "" : ", ") + detail::qualified_type_name<std::tuple_element_t<Indices, args_tuple>>()), ...);
+        }(std::make_index_sequence<std::tuple_size_v<args_tuple>>{});
+        text += ")";
+        return text;
+    }
+
+    template <typename Type>
+    void append_callable_parameter_types(
+        CallableSignatureDecl& signature, const ModuleDecl* current_module) const
+    {
+        using traits = detail::callable_traits_t<Type>;
+        using args_tuple = typename traits::args_tuple;
+
+        [&]<std::size_t... Indices>(std::index_sequence<Indices...>) {
+            (signature.parameter_types.push_back(
+                 make_bound_param_type_ref<std::tuple_element_t<Indices, args_tuple>>(current_module)),
+                ...);
+        }(std::make_index_sequence<std::tuple_size_v<args_tuple>>{});
+    }
+
+    template <typename Type> void assign_callable_metadata(TypeRef& type_ref, const ModuleDecl* current_module) const
+    {
+        if constexpr (detail::is_callable_v<Type>)
+        {
+            using traits = detail::callable_traits_t<Type>;
+
+            type_ref.is_function_pointer = traits::is_function_pointer;
+            type_ref.is_std_function = traits::is_std_function;
+            type_ref.callable_id = callable_signature_hash(callable_signature_text<Type>());
+            type_ref.managed_type_name = "__csbind23_Delegate_" + type_ref.callable_id;
+
+            auto signature = std::make_shared<CallableSignatureDecl>();
+            signature->return_type = make_bound_return_type_ref<typename traits::return_type>(current_module);
+            append_callable_parameter_types<Type>(*signature, current_module);
+            type_ref.callable_signature = std::move(signature);
+
+            if constexpr (traits::is_function_pointer)
+            {
+                type_ref.c_abi_name = detail::qualified_type_name<std::remove_reference_t<Type>>();
+                type_ref.pinvoke_name = "System.IntPtr";
+                type_ref.managed_to_pinvoke_expression = std::format(
+                    "({{value}} is null ? System.IntPtr.Zero : {{module}}.__csbind23_CreateNativeFunctionPointer_{}({{value}}))",
+                    type_ref.callable_id);
+                type_ref.managed_from_pinvoke_expression = std::format(
+                    "({{value}} == System.IntPtr.Zero ? null! : {{module}}.__csbind23_CreateManagedFunctionPointer_{}({{value}}))",
+                    type_ref.callable_id);
+                return;
+            }
+
+            type_ref.c_abi_name = type_ref.is_const ? "const void*" : "void*";
+            type_ref.pinvoke_name = "System.IntPtr";
+            type_ref.managed_to_pinvoke_expression = std::format(
+                "({{value}} is null ? System.IntPtr.Zero : {{module}}.__csbind23_CreateNativeCallable_{}({{value}}))",
+                type_ref.callable_id);
+            type_ref.managed_from_pinvoke_expression = std::format(
+                "({{value}} == System.IntPtr.Zero ? null! : {{module}}.__csbind23_CreateManagedCallable_{}({{value}}))",
+                type_ref.callable_id);
+            type_ref.managed_finalize_to_pinvoke_statement = std::format(
+                "if ({{pinvoke}} != System.IntPtr.Zero)\n{{\n    {{module}}.__csbind23_ReleaseNativeCallable_{}({{pinvoke}});\n}}",
+                type_ref.callable_id);
         }
     }
 
@@ -981,7 +1066,7 @@ private:
         }
 
         using Base = std::remove_cv_t<std::remove_pointer_t<Bare>>;
-        if constexpr (!std::is_same_v<Base, Bare>)
+        if constexpr (!std::is_same_v<Base, Bare> && !std::is_function_v<Base>)
         {
             assign_managed_converter<Base>(type_ref, for_return_type);
             if (type_ref.has_managed_converter())
