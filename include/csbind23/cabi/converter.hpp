@@ -1,5 +1,7 @@
 #pragma once
 
+#include "csbind23/detail/temporary_memory_allocator.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstring>
@@ -401,8 +403,8 @@ template <typename Type, std::size_t Extent> std::string array_finalize_copyback
     {
         return std::string("global::CsBind23.Generated.CsBind23ArrayInterop.NativeToExistingArrayFixed<")
             + array_element_pinvoke_type_name<Type>() + ">({pinvoke}, {managed}, " + std::to_string(Extent)
-            + ")\n"
-              "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({pinvoke})";
+                        + ")\n"
+                            "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({pinvoke})";
     }
 
     return std::string("global::CsBind23.Generated.CsBind23ArrayInterop.NativeToExistingArrayFixed<")
@@ -483,7 +485,8 @@ struct Converter<std::array<Type, Extent>>
 
     static c_abi_type to_c_abi(const cpp_type& value)
     {
-        auto* buffer = static_cast<c_abi_element_type*>(std::malloc(sizeof(c_abi_element_type) * Extent));
+        auto* buffer = static_cast<c_abi_element_type*>(
+            csbind23::detail::temporary_memory_malloc(sizeof(c_abi_element_type) * Extent));
         if (buffer == nullptr)
         {
             return nullptr;

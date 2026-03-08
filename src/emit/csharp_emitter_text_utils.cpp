@@ -1,9 +1,45 @@
 #include "csharp_emitter_text_utils.hpp"
 
+#include <cctype>
 #include <format>
 
 namespace csbind23::emit
 {
+
+namespace
+{
+
+std::string module_placeholder_value(std::string_view module_name)
+{
+    if (module_name.size() >= 6 && module_name.substr(module_name.size() - 6) == "Native")
+    {
+        return std::string(module_name);
+    }
+
+    std::string result;
+    bool capitalize_next = true;
+    for (const unsigned char ch : module_name)
+    {
+        if (std::isalnum(ch) == 0)
+        {
+            capitalize_next = true;
+            continue;
+        }
+
+        result.push_back(capitalize_next ? static_cast<char>(std::toupper(ch)) : static_cast<char>(ch));
+        capitalize_next = false;
+    }
+
+    if (result.empty())
+    {
+        return std::string(module_name);
+    }
+
+    result += "Native";
+    return result;
+}
+
+} // namespace
 
 std::string replace_all(std::string value, std::string_view from, std::string_view to)
 {
@@ -28,7 +64,7 @@ std::string render_inline_template(
     templ = replace_all(std::move(templ), "{managed}", managed_name);
     templ = replace_all(std::move(templ), "{pinvoke}", pinvoke_name);
     templ = replace_all(std::move(templ), "{value}", value_name);
-    templ = replace_all(std::move(templ), "{module}", module_name);
+    templ = replace_all(std::move(templ), "{module}", module_placeholder_value(module_name));
     return templ;
 }
 

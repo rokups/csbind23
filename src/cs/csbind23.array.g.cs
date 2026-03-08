@@ -22,7 +22,9 @@ public static class CsBind23ArrayInterop
         }
     }
 
-    public static unsafe System.IntPtr ArrayToNativeFixed<T>(T[] value, int expectedLength)
+    public static unsafe System.IntPtr ArrayToNativeFixed<T>(
+        T[] value,
+        int expectedLength)
         where T : unmanaged
     {
         ValidateArrayLength(value, expectedLength, nameof(value));
@@ -32,12 +34,15 @@ public static class CsBind23ArrayInterop
             return System.IntPtr.Zero;
         }
 
-        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(checked(sizeof(T) * expectedLength));
+        System.IntPtr ptr = CsBind23Memory.Alloc(checked((nuint)(sizeof(T) * expectedLength)));
         new System.ReadOnlySpan<T>(value, 0, expectedLength).CopyTo(new System.Span<T>((void*)ptr, expectedLength));
         return ptr;
     }
 
-    public static unsafe System.IntPtr ArrayToNativeCounted<T>(T[] value, int count, string paramName)
+    public static unsafe System.IntPtr ArrayToNativeCounted<T>(
+        T[] value,
+        int count,
+        string paramName)
         where T : unmanaged
     {
         ValidateArrayCount(value, count, paramName);
@@ -46,7 +51,7 @@ public static class CsBind23ArrayInterop
             return System.IntPtr.Zero;
         }
 
-        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(checked(sizeof(T) * count));
+        System.IntPtr ptr = CsBind23Memory.Alloc(checked((nuint)(sizeof(T) * count)));
         new System.ReadOnlySpan<T>(value, 0, count).CopyTo(new System.Span<T>((void*)ptr, count));
         return ptr;
     }
@@ -63,7 +68,7 @@ public static class CsBind23ArrayInterop
             return System.IntPtr.Zero;
         }
 
-        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(checked(sizeof(TNative) * expectedLength));
+        System.IntPtr ptr = CsBind23Memory.Alloc(checked((nuint)(sizeof(TNative) * expectedLength)));
         var span = new System.Span<TNative>((void*)ptr, expectedLength);
         for (int index = 0; index < expectedLength; ++index)
         {
@@ -85,7 +90,7 @@ public static class CsBind23ArrayInterop
             return System.IntPtr.Zero;
         }
 
-        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(checked(sizeof(TNative) * count));
+        System.IntPtr ptr = CsBind23Memory.Alloc(checked((nuint)(sizeof(TNative) * count)));
         var span = new System.Span<TNative>((void*)ptr, count);
         for (int index = 0; index < count; ++index)
         {
@@ -190,9 +195,6 @@ public static class CsBind23ArrayInterop
 
     public static void FreeNativeBuffer(System.IntPtr ptr)
     {
-        if (ptr != System.IntPtr.Zero)
-        {
-            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
-        }
+        CsBind23Memory.Free(ptr);
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "csbind23/bindings_generator.hpp"
+#include "csbind23/detail/temporary_memory_allocator.hpp"
 #include "csbind23/std/detail.hpp"
 
 #include <algorithm>
@@ -337,7 +338,7 @@ template <> struct Converter<std::string>
 
     static c_abi_type to_c_abi(const cpp_type& value)
     {
-        auto* buffer = static_cast<char*>(std::malloc(value.size() + 1));
+        auto* buffer = static_cast<char*>(csbind23::detail::temporary_memory_malloc(value.size() + 1));
         if (buffer == nullptr)
         {
             return nullptr;

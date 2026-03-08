@@ -489,7 +489,7 @@ std::string render_c_array_to_native_expression(
     const ParameterDecl& parameter,
     std::string_view managed_array_expression,
     std::string_view count_expression,
-    std::string_view module_name)
+    std::string_view native_class)
 {
     const std::string managed_element_type = supported_c_array_element_type(parameter).value_or("System.IntPtr");
     const std::string native_element_type = c_array_native_element_type_name(parameter);
@@ -502,7 +502,7 @@ std::string render_c_array_to_native_expression(
             managed_array_expression,
             count_expression,
             parameter.name,
-            render_c_array_element_to_native_lambda(parameter, "element", module_name));
+            render_c_array_element_to_native_lambda(parameter, "element", native_class));
     }
 
     return std::format(
@@ -518,11 +518,13 @@ std::string render_c_array_finalize_statement(
     std::string_view pinvoke_name,
     std::string_view managed_array_expression,
     std::string_view count_expression,
-    std::string_view module_name)
+    std::string_view native_class)
 {
     if (parameter.type.is_const)
     {
-        return std::format("global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({})", pinvoke_name);
+        return std::format(
+            "global::CsBind23.Generated.CsBind23ArrayInterop.FreeNativeBuffer({})",
+            pinvoke_name);
     }
 
     const std::string managed_element_type = supported_c_array_element_type(parameter).value_or("System.IntPtr");
@@ -538,7 +540,7 @@ std::string render_c_array_finalize_statement(
             managed_array_expression,
             count_expression,
             parameter.name,
-            render_c_array_element_from_native_lambda(parameter, "element", module_name),
+            render_c_array_element_from_native_lambda(parameter, "element", native_class),
             pinvoke_name);
     }
 
@@ -1537,7 +1539,7 @@ void append_free_generic_dispatch_wrapper(TextWriter& output, const ModuleDecl& 
                                 typed_name,
                                 pinvoke_name,
                                 pinvoke_name,
-                                module_decl.name));
+                                native_class_name(module_decl)));
                         }
                     }
                     else
@@ -2111,7 +2113,7 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
                 const std::string converted = render_inline_template(
                     parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name,
-                    module_decl.name);
+                    native_class_name(module_decl));
                 append_embedded_assignment(
                     output,
                     "            ",
@@ -2123,7 +2125,7 @@ void append_generic_class_constructor(TextWriter& output, const GenericClassGrou
                 {
                     finalize_statements.push_back(render_inline_template(
                         parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
-                        module_decl.name));
+                        native_class_name(module_decl)));
                 }
             }
             else
@@ -2350,7 +2352,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                                 typed_name,
                                 pinvoke_name,
                                 pinvoke_name,
-                                module_decl.name));
+                                native_class_name(module_decl)));
                         }
                     }
                     else
@@ -2364,7 +2366,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                 const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
                 const std::string converted = render_inline_template(
                     parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name,
-                    module_decl.name);
+                    native_class_name(module_decl));
                 append_embedded_assignment(
                     output,
                     "            ",
@@ -2376,7 +2378,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                 {
                     finalize_statements.push_back(render_inline_template(
                         parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
-                        module_decl.name));
+                        native_class_name(module_decl)));
                 }
             }
             else
@@ -2635,7 +2637,7 @@ void append_generic_class_method(TextWriter& output, const ModuleDecl& module_de
                     {
                         append_embedded_statement(output, "                ", render_inline_template(
                             instantiation->return_type.managed_finalize_from_pinvoke_statement, managed_result_name,
-                            native_result_name, native_result_name, module_decl.name));
+                            native_result_name, native_result_name, native_class_name(module_decl)));
                     }
                     output.append_line("            }");
                 }
@@ -3026,14 +3028,14 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
                         parameter,
                         parameter.name,
                         c_array_count_expression(method_decl, index),
-                        module_name));
+                        native_class_name(module_decl)));
                 call_arguments.push_back(pinvoke_name);
                 finalize_statements.push_back(render_c_array_finalize_statement(
                     parameter,
                     pinvoke_name,
                     parameter.name,
                     c_array_count_expression(method_decl, index),
-                    module_name));
+                    native_class_name(module_decl)));
             }
             continue;
         }
@@ -3043,7 +3045,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             const std::string pinvoke_name = std::format("__csbind23_arg{}_pinvoke", index);
             const std::string converted = render_inline_template(
                 parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name,
-                module_name);
+                native_class_name(module_decl));
             append_embedded_assignment(
                 output, "        ", std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name), converted);
             call_arguments.push_back(pinvoke_name);
@@ -3052,7 +3054,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             {
                 finalize_statements.push_back(render_inline_template(
                     parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
-                    module_name));
+                    native_class_name(module_decl)));
             }
             continue;
         }
@@ -3221,7 +3223,7 @@ void append_wrapper_method(TextWriter& output, const ModuleDecl& module_decl, co
             {
                 append_embedded_statement(output, "            ", render_inline_template(
                     method_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name,
-                    native_result_name, native_result_name, module_name));
+                    native_result_name, native_result_name, native_class_name(module_decl)));
             }
             output.append_line("        }");
         }
@@ -3429,7 +3431,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
                     std::format("{} {} = ", wrapper_type_name(parameter.type), managed_name),
                     render_inline_template(
                         parameter.type.managed_from_pinvoke_expression, managed_name, parameter.name, parameter.name,
-                        module_name));
+                        native_class_name(module_decl)));
                 managed_args.push_back(managed_name);
             }
             else
@@ -3464,7 +3466,7 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             {
                 append_embedded_return(output, "        ", render_inline_template(
                     method_decl.return_type.managed_to_pinvoke_expression, "__csbind23_result", "__csbind23_result",
-                    "__csbind23_result", module_name));
+                    "__csbind23_result", native_class_name(module_decl)));
             }
             else
             {
@@ -3600,13 +3602,13 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
                     std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
                     render_inline_template(
                         parameter.type.managed_to_pinvoke_expression, parameter.name, pinvoke_name, parameter.name,
-                        module_name));
+                        native_class_name(module_decl)));
                 converted_arguments.push_back(pinvoke_name);
                 if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
                         parameter.type.managed_finalize_to_pinvoke_statement, parameter.name, pinvoke_name, pinvoke_name,
-                        module_name));
+                        native_class_name(module_decl)));
                 }
                 continue;
             }
@@ -3839,7 +3841,8 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
 } // namespace
 
-std::vector<std::filesystem::path> copy_csharp_support_files(const std::filesystem::path& output_root)
+std::vector<std::filesystem::path> copy_csharp_support_files(
+    const std::filesystem::path& output_root)
 {
     std::filesystem::create_directories(output_root);
 
@@ -4202,14 +4205,14 @@ std::vector<std::filesystem::path> emit_csharp_module(
                             parameter,
                             managed_argument_expr,
                             c_array_count_expression(function_decl, index),
-                            module_decl.name));
+                            native_class_name(module_decl)));
                     call_arguments.push_back(pinvoke_name);
                     finalize_statements.push_back(render_c_array_finalize_statement(
                         parameter,
                         pinvoke_name,
                         managed_argument_expr,
                         c_array_count_expression(function_decl, index),
-                        module_decl.name));
+                        native_class_name(module_decl)));
                 }
                 continue;
             }
@@ -4222,13 +4225,13 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     "        ",
                     std::format("{} {} = ", parameter.type.pinvoke_name, pinvoke_name),
                     render_inline_template(parameter.type.managed_to_pinvoke_expression, managed_argument_expr, pinvoke_name,
-                        managed_argument_expr, module_decl.name));
+                        managed_argument_expr, native_class_name(module_decl)));
                 call_arguments.push_back(pinvoke_name);
                 if (!parameter.type.managed_finalize_to_pinvoke_statement.empty())
                 {
                     finalize_statements.push_back(render_inline_template(
                         parameter.type.managed_finalize_to_pinvoke_statement, managed_argument_expr, pinvoke_name, pinvoke_name,
-                        module_decl.name));
+                        native_class_name(module_decl)));
                 }
                 continue;
             }
@@ -4474,7 +4477,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
                     {
                         append_embedded_statement(generated, "            ", render_inline_template(
                             function_decl.return_type.managed_finalize_from_pinvoke_statement, managed_result_name,
-                            native_result_name, native_result_name, module_decl.name));
+                            native_result_name, native_result_name, native_class_name(module_decl)));
                     }
                     generated.append_line("        }");
                 }

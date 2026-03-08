@@ -6,7 +6,7 @@ public static class CsBind23Utf8Interop
     {
         string text = value ?? string.Empty;
         byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
-        System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes.Length + 1);
+        System.IntPtr ptr = CsBind23Memory.Alloc(checked((nuint)(bytes.Length + 1)));
         if (bytes.Length != 0)
         {
             System.Runtime.InteropServices.Marshal.Copy(bytes, 0, ptr, bytes.Length);
@@ -53,9 +53,6 @@ public static class CsBind23Utf8Interop
 
     public static void Free(System.IntPtr ptr)
     {
-        if (ptr != System.IntPtr.Zero)
-        {
-            System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
-        }
+        CsBind23Memory.Free(ptr);
     }
 }

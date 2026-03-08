@@ -420,6 +420,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
     generated.append(R"cpp(
         #include <csbind23/cabi/converter.hpp>
         #include <csbind23/detail/converter_internal.hpp>
+        #include <csbind23/detail/temporary_memory_allocator.hpp>
         #include <cstddef>
         #include <type_traits>
         #include <typeinfo>

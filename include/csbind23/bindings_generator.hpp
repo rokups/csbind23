@@ -1,5 +1,6 @@
 #pragma once
 
+#include "csbind23/detail/temporary_memory_allocator.hpp"
 #include "csbind23/emit/csharp_naming.hpp"
 #include "csbind23/ir.hpp"
 #include "csbind23/type_utils.hpp"
@@ -563,6 +564,16 @@ private:
             }
         }
     }
+
+    static std::string internal_support_pinvoke_library(const std::vector<ModuleDecl>& modules)
+    {
+        const auto fallback_it = std::find_if(modules.begin(), modules.end(), [](const ModuleDecl& module_decl) {
+            return module_decl.name != "csbind23_internal" && !module_decl.pinvoke_library.empty();
+        });
+        return fallback_it == modules.end() ? std::string{} : fallback_it->pinvoke_library;
+    }
+
+    void append_internal_modules();
 
     void validate_imports() const
     {
@@ -2292,6 +2303,29 @@ EnumBuilder ModuleBuilder::enum_(std::string_view name, Options&&... options)
     enum_decl.csharp_attributes = enum_options.csharp_attributes;
     module_decl_->enums.push_back(std::move(enum_decl));
     return EnumBuilder(*owner_, module_decl_->enums.back());
+}
+
+inline void BindingsGenerator::append_internal_modules()
+{
+    if (find_module("csbind23_internal") != nullptr)
+    {
+        return;
+    }
+
+    const std::string pinvoke_library = internal_support_pinvoke_library(modules_);
+    if (pinvoke_library.empty())
+    {
+        return;
+    }
+
+    auto internal_module = module("csbind23_internal");
+    internal_module.pinvoke_library(pinvoke_library);
+    internal_module.csharp_namespace("CsBind23.Generated");
+    internal_module.csharp_api_class("CsBind23MemoryApi");
+    internal_module.def("Alloc", &csbind23::detail::temporary_memory_malloc,
+        CppSymbol{"csbind23::detail::temporary_memory_malloc"});
+    internal_module.def("Free", &csbind23::detail::temporary_memory_free,
+        CppSymbol{"csbind23::detail::temporary_memory_free"});
 }
 
 } // namespace csbind23

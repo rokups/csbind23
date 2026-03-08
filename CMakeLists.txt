@@ -4,6 +4,11 @@ project(csbind23 VERSION 0.1.0 LANGUAGES CXX)
 
 include(${PROJECT_SOURCE_DIR}/cmake/Csbind23Managed.cmake)
 
+set(CSBIND23_TEMPORARY_ALLOCATOR_SIZE
+	"1048576"
+	CACHE STRING
+	"Default size in bytes for the thread-local temporary allocator used by generated bindings.")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
