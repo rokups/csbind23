@@ -77,11 +77,13 @@ public class ClassGenericTests
     {
         using var intCounter = new GenericCounter<int>();
         intCounter.set(8);
-        Assert.Equal("count:8", intCounter.describe("count"));
+        using var count = StringViewTestUtils.Lease("count");
+        Assert.Equal("count:8", intCounter.describe(count.View));
 
         using var doubleCounter = new GenericCounter<double>();
         doubleCounter.set(3.5);
-        Assert.Equal("v:3.5", doubleCounter.describe("v"));
+        using var v = StringViewTestUtils.Lease("v");
+        Assert.Equal("v:3.5", doubleCounter.describe(v.View));
     }
 
     [Fact]

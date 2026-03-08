@@ -91,23 +91,28 @@ public class BasicGenericTests
     [Fact]
     public void Generic_With_String_Companion_Parameter_Works_For_Int_And_Double()
     {
-        Assert.Equal("id:42", BasicGenericApi.tagged_value_generic<int>(42, "id"));
-        Assert.Equal("v:3.5", BasicGenericApi.tagged_value_generic<double>(3.5, "v"));
+        using var id = StringViewTestUtils.Lease("id");
+        using var v = StringViewTestUtils.Lease("v");
+        Assert.Equal("id:42", BasicGenericApi.tagged_value_generic<int>(42, id.View));
+        Assert.Equal("v:3.5", BasicGenericApi.tagged_value_generic<double>(3.5, v.View));
     }
 
     [Fact]
     public void Generic_With_String_Companion_Parameter_Throws_For_Unmapped_Type()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => BasicGenericApi.tagged_value_generic<float>(2.0f, "f"));
+        using var f = StringViewTestUtils.Lease("f");
+        var ex = Assert.Throws<NotSupportedException>(() => BasicGenericApi.tagged_value_generic<float>(2.0f, f.View));
         Assert.Contains("tagged_value_generic", ex.Message);
     }
 
     [Fact]
     public void Generic_With_StringView_And_BasicType_Dispatches()
     {
-        Assert.Equal(11, BasicGenericApi.prefixed_bias_generic<int>("x", 10));
-        Assert.Equal(10, BasicGenericApi.prefixed_bias_generic<int>("", 10));
-        Assert.Equal(2.25, BasicGenericApi.prefixed_bias_generic<double>("x", 1.25));
+        using var x = StringViewTestUtils.Lease("x");
+        using var empty = StringViewTestUtils.Lease("");
+        Assert.Equal(11, BasicGenericApi.prefixed_bias_generic<int>(x.View, 10));
+        Assert.Equal(10, BasicGenericApi.prefixed_bias_generic<int>(empty.View, 10));
+        Assert.Equal(2.25, BasicGenericApi.prefixed_bias_generic<double>(x.View, 1.25));
     }
 
     [Fact]

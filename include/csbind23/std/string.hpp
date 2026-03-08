@@ -15,7 +15,12 @@
 namespace csbind23
 {
 
-inline std::string_view csbind23_string_snapshot_utf8(const std::string& value)
+inline const char* csbind23_string_snapshot_utf8(const std::string& value)
+{
+    return value.c_str();
+}
+
+inline std::string_view csbind23_string_snapshot_view(const std::string& value)
 {
     return value;
 }
@@ -30,9 +35,9 @@ inline void csbind23_string_clear(std::string& value)
     value.clear();
 }
 
-inline void csbind23_string_append_utf8(std::string& value, std::string_view suffix)
+inline void csbind23_string_append_utf8(std::string& value, const char* suffix)
 {
-    value.append(suffix);
+    value.append(suffix == nullptr ? "" : suffix);
 }
 
 inline void csbind23_string_append_string(std::string& value, const std::string& suffix)
@@ -114,30 +119,30 @@ inline unsigned short csbind23_string_char_at_utf8(const std::string& value, int
     throw std::out_of_range("string index out of range");
 }
 
-inline bool csbind23_string_contains_utf8(const std::string& value, std::string_view other)
+inline bool csbind23_string_contains_utf8(const std::string& value, const char* other)
 {
-    return value.find(other) != std::string::npos;
+    return value.find(other == nullptr ? "" : other) != std::string::npos;
 }
 
-inline bool csbind23_string_starts_with_utf8(const std::string& value, std::string_view other)
+inline bool csbind23_string_starts_with_utf8(const std::string& value, const char* other)
 {
-    return value.starts_with(other);
+    return value.starts_with(other == nullptr ? "" : other);
 }
 
-inline bool csbind23_string_ends_with_utf8(const std::string& value, std::string_view other)
+inline bool csbind23_string_ends_with_utf8(const std::string& value, const char* other)
 {
-    return value.ends_with(other);
+    return value.ends_with(other == nullptr ? "" : other);
 }
 
-inline int csbind23_string_index_of_utf8(const std::string& value, std::string_view other)
+inline int csbind23_string_index_of_utf8(const std::string& value, const char* other)
 {
-    const std::size_t index = value.find(other);
+    const std::size_t index = value.find(other == nullptr ? "" : other);
     return index == std::string::npos ? -1 : static_cast<int>(index);
 }
 
-inline int csbind23_string_last_index_of_utf8(const std::string& value, std::string_view other)
+inline int csbind23_string_last_index_of_utf8(const std::string& value, const char* other)
 {
-    const std::size_t index = value.rfind(other);
+    const std::size_t index = value.rfind(other == nullptr ? "" : other);
     return index == std::string::npos ? -1 : static_cast<int>(index);
 }
 
@@ -175,9 +180,11 @@ inline std::string csbind23_string_substring_len(const std::string& value, int s
 }
 
 inline std::string csbind23_string_replace_utf8(
-    const std::string& value, std::string_view old_value, std::string_view new_value)
+    const std::string& value, const char* old_value, const char* new_value)
 {
-    if (old_value.empty())
+    const std::string_view old_text = old_value == nullptr ? std::string_view{} : std::string_view{old_value};
+    const std::string_view new_text = new_value == nullptr ? std::string_view{} : std::string_view{new_value};
+    if (old_text.empty())
     {
         return value;
     }
@@ -186,14 +193,14 @@ inline std::string csbind23_string_replace_utf8(
     std::size_t start = 0;
     while (true)
     {
-        const std::size_t index = result.find(old_value, start);
+        const std::size_t index = result.find(old_text, start);
         if (index == std::string::npos)
         {
             break;
         }
 
-        result.replace(index, old_value.size(), new_value);
-        start = index + new_value.size();
+        result.replace(index, old_text.size(), new_text);
+        start = index + new_text.size();
     }
 
     return result;
@@ -263,9 +270,9 @@ inline std::string csbind23_string_to_lower_invariant(const std::string& value)
     return result;
 }
 
-inline int csbind23_string_compare_utf8(const std::string& value, std::string_view other)
+inline int csbind23_string_compare_utf8(const std::string& value, const char* other)
 {
-    return value.compare(other);
+    return value.compare(other == nullptr ? "" : other);
 }
 
 inline int csbind23_string_compare_string(const std::string& value, const std::string& other)
@@ -406,6 +413,12 @@ inline std::string make_string_wrapper_csharp_code(std::string_view wrapper_name
     public int Count => Length;
 
     public char this[int index] => unchecked((char)__char_at_utf8(index));
+
+    public global::Std.StringView AsView()
+    {
+        ThrowIfDisposed();
+        return __snapshot_view();
+    }
 
     public __CSBIND23_STRING_WRAPPER__ Set(string value)
     {
@@ -917,11 +930,13 @@ inline ClassBuilder add_string(BindingsGenerator& generator)
     auto builder = module.class_<std::string>("String", CppName{"std::string"});
     builder.csharp_interface("System.Collections.Generic.IEnumerable<char>");
     builder.csharp_interface("System.Collections.IEnumerable");
+    builder.csharp_interface("global::Std.IStringUtf8View");
     builder.ctor<>();
     builder.def<&csbind23::csbind23_string_utf8_length>("__utf8_length", Private{});
     builder.def<&csbind23::csbind23_string_char_at_utf8>("__char_at_utf8", Private{});
     builder.def<&csbind23::csbind23_string_clear>("__clear", Private{});
     builder.def<&csbind23::csbind23_string_snapshot_utf8>("__snapshot_utf8", Private{});
+    builder.def<&csbind23::csbind23_string_snapshot_view>("__snapshot_view", Private{});
     builder.def<&csbind23::csbind23_string_assign_utf8>("__assign_utf8", Private{});
     builder.def<&csbind23::csbind23_string_append_utf8>("__append_utf8", Private{});
     builder.def<&csbind23::csbind23_string_append_string>("__append_string", Private{});

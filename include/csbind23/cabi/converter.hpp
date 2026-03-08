@@ -323,49 +323,6 @@ template <> struct Converter<const char*>
     static cpp_type from_c_abi(c_abi_type value) { return value; }
 };
 
-template <> struct Converter<std::string_view>
-{
-    using cpp_type = std::string_view;
-    using c_abi_type = StringView;
-
-    static constexpr std::string_view c_abi_param_type_name() { return "const char*"; }
-    static constexpr std::string_view c_abi_return_type_name() { return "csbind23::cabi::StringView"; }
-    static constexpr std::string_view pinvoke_param_type_name() { return "System.IntPtr"; }
-    static constexpr std::string_view pinvoke_return_type_name() { return "global::CsBind23.Generated.CsBind23StringView"; }
-    static constexpr std::string_view managed_type_name() { return "string"; }
-    static constexpr std::string_view managed_to_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} ?? string.Empty)";
-    }
-    static constexpr std::string_view managed_from_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.CsBind23StringViewExtensions.ToManaged({value})";
-    }
-    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
-    {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
-    }
-
-    static c_abi_type to_c_abi(const cpp_type& value)
-    {
-        return c_abi_type{.str = value.data(), .length = value.size()};
-    }
-
-    static cpp_type from_c_abi(const char* value)
-    {
-        return value == nullptr ? std::string_view{} : std::string_view{value};
-    }
-
-    static cpp_type from_c_abi(c_abi_type value)
-    {
-        if (value.str == nullptr)
-        {
-            return std::string_view{};
-        }
-        return std::string_view{value.str, value.length};
-    }
-};
-
 template <std::size_t Extent> struct Converter<std::array<int, Extent>>
 {
     using cpp_type = std::array<int, Extent>;

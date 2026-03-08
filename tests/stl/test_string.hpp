@@ -3,11 +3,30 @@
 #include "csbind23/bindings_generator.hpp"
 #include "csbind23/std.hpp"
 
+#include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
 
 namespace csbind23::testing::strings
 {
+
+inline std::array<char, 64>& live_string_view_storage()
+{
+    static std::array<char, 64> storage = [] {
+        std::array<char, 64> value{};
+        constexpr std::string_view text = "live-view";
+        std::copy(text.begin(), text.end(), value.begin());
+        return value;
+    }();
+    return storage;
+}
+
+inline std::size_t& live_string_view_length()
+{
+    static std::size_t length = std::string_view{"live-view"}.size();
+    return length;
+}
 
 inline std::string echo_by_value(std::string value)
 {
@@ -42,6 +61,26 @@ inline std::string consume_string_view(std::string_view value)
 inline std::string_view get_string_view()
 {
     return "view-return";
+}
+
+inline std::string_view get_live_string_view()
+{
+    auto& storage = live_string_view_storage();
+    const std::size_t length = live_string_view_length();
+    return std::string_view{storage.data(), length};
+}
+
+inline void set_live_string_view(std::string_view value)
+{
+    auto& storage = live_string_view_storage();
+
+    const std::size_t count = std::min<std::size_t>(value.size(), storage.size());
+    std::copy_n(value.data(), count, storage.data());
+    if (count < storage.size())
+    {
+        std::fill(storage.begin() + static_cast<std::ptrdiff_t>(count), storage.end(), '\0');
+    }
+    live_string_view_length() = count;
 }
 
 inline const std::string& get_const_ref()
@@ -115,6 +154,8 @@ inline void register_bindings_string(BindingsGenerator& generator, std::string_v
         .def<&strings::get_cstr>("string_get_cstr")
         .def<&strings::consume_string_view>("string_consume_string_view")
         .def<&strings::get_string_view>("string_get_string_view")
+        .def<&strings::get_live_string_view>("string_get_live_string_view")
+        .def<&strings::set_live_string_view>("string_set_live_string_view")
         .def<&strings::get_const_ref>("string_get_const_ref")
         .def<&strings::get_ref>("string_get_ref")
         .def<&strings::set_ref_value>("string_set_ref_value")

@@ -80,6 +80,20 @@ std::filesystem::path write_csharp_file(
     return output_path;
 }
 
+std::filesystem::path support_csharp_source_root()
+{
+    return std::filesystem::path(__FILE__).parent_path().parent_path() / "cs";
+}
+
+std::filesystem::path copy_support_csharp_file(
+    const std::filesystem::path& output_root, std::string_view filename)
+{
+    const auto source_path = support_csharp_source_root() / std::string(filename);
+    const auto output_path = output_root / std::string(filename);
+    std::filesystem::copy_file(source_path, output_path, std::filesystem::copy_options::overwrite_existing);
+    return output_path;
+}
+
 bool is_any_of(std::string_view value, std::initializer_list<std::string_view> candidates)
 {
     for (const auto candidate : candidates)
@@ -287,6 +301,61 @@ bool module_uses_managed_type(const ModuleDecl& module_decl, std::string_view ma
     return false;
 }
 
+bool module_uses_string_view_support(const ModuleDecl& module_decl)
+{
+    return module_uses_pinvoke_type(module_decl, "global::Std.StringView")
+        || module_uses_pinvoke_type(module_decl, "Std.StringView")
+        || module_uses_managed_type(module_decl, "global::Std.StringView")
+        || module_uses_managed_type(module_decl, "Std.StringView");
+}
+
+bool module_uses_std_string_support(const ModuleDecl& module_decl)
+{
+    auto type_matches = [](const TypeRef& type_ref) {
+        return type_ref.cpp_name == "std::string";
+    };
+
+    for (const auto& function_decl : module_decl.functions)
+    {
+        if (type_matches(function_decl.return_type))
+        {
+            return true;
+        }
+        for (const auto& parameter : function_decl.parameters)
+        {
+            if (type_matches(parameter.type))
+            {
+                return true;
+            }
+        }
+    }
+
+    for (const auto& class_decl : module_decl.classes)
+    {
+        if (class_decl.cpp_name == "std::string")
+        {
+            return true;
+        }
+
+        for (const auto& method_decl : class_decl.methods)
+        {
+            if (type_matches(method_decl.return_type))
+            {
+                return true;
+            }
+            for (const auto& parameter : method_decl.parameters)
+            {
+                if (type_matches(parameter.type))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 bool module_uses_c_array_int_parameters(const ModuleDecl& module_decl)
 {
     auto is_int_array_parameter = [](const ParameterDecl& parameter) {
@@ -435,7 +504,7 @@ std::string public_parameter_type_name(const ParameterDecl& parameter)
 void emit_shared_pinvoke_types_if_needed(
     const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
 {
-    if (!module_uses_pinvoke_type(module_decl, "CsBind23StringView") && !module_uses_managed_type(module_decl, "string"))
+    if (!module_uses_string_view_support(module_decl) && !module_uses_managed_type(module_decl, "string"))
     {
         return;
     }
@@ -446,88 +515,24 @@ void emit_shared_pinvoke_types_if_needed(
         return;
     }
 
-    TextWriter shared(256);
-    shared.append_line_format("namespace {};", shared_support_namespace());
-    shared.append_line();
-    shared.append(R"cs(
-    public static class CsBind23Utf8Interop
+    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.types.g.cs"));
+}
+
+void emit_shared_string_view_wrapper_if_needed(
+    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
+{
+    if (!module_uses_string_view_support(module_decl) && !module_uses_std_string_support(module_decl))
     {
-        public static System.IntPtr StringToNative(string value)
-        {
-            string text = value ?? string.Empty;
-            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
-            System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes.Length + 1);
-            if (bytes.Length != 0)
-            {
-                System.Runtime.InteropServices.Marshal.Copy(bytes, 0, ptr, bytes.Length);
-            }
-            System.Runtime.InteropServices.Marshal.WriteByte(ptr, bytes.Length, 0);
-            return ptr;
-        }
-
-        public static string NativeToString(System.IntPtr ptr)
-        {
-            if (ptr == System.IntPtr.Zero)
-            {
-                return string.Empty;
-            }
-
-            int length = 0;
-            while (System.Runtime.InteropServices.Marshal.ReadByte(ptr, length) != 0)
-            {
-                length++;
-            }
-
-            if (length == 0)
-            {
-                return string.Empty;
-            }
-
-            byte[] bytes = new byte[length];
-            System.Runtime.InteropServices.Marshal.Copy(ptr, bytes, 0, length);
-            return System.Text.Encoding.UTF8.GetString(bytes);
-        }
-
-        public static void Free(System.IntPtr ptr)
-        {
-            if (ptr != System.IntPtr.Zero)
-            {
-                System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
-            }
-        }
+        return;
     }
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public readonly struct CsBind23StringView
+    const auto shared_path = output_root / "csbind23_stl.StringView.g.cs";
+    if (std::filesystem::exists(shared_path))
     {
-        public readonly System.IntPtr str;
-        public readonly nuint length;
-
-        public CsBind23StringView(System.IntPtr str, nuint length)
-        {
-            this.str = str;
-            this.length = length;
-        }
+        return;
     }
 
-    public static class CsBind23StringViewExtensions
-    {
-        public static string ToManaged(CsBind23StringView view)
-        {
-            if (view.str == System.IntPtr.Zero || view.length == 0)
-            {
-                return string.Empty;
-            }
-
-            int length = checked((int)view.length);
-            byte[] bytes = new byte[length];
-            System.Runtime.InteropServices.Marshal.Copy(view.str, bytes, 0, length);
-            return System.Text.Encoding.UTF8.GetString(bytes);
-        }
-    }
-    )cs");
-
-    generated_files.push_back(write_csharp_file(output_root, "csbind23.types.g.cs", shared.str()));
+    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23_stl.StringView.g.cs"));
 }
 
 void emit_shared_instance_cache_types_if_needed(
@@ -539,85 +544,7 @@ void emit_shared_instance_cache_types_if_needed(
         return;
     }
 
-    TextWriter shared(1024);
-    shared.append_line_format("namespace {};", shared_support_namespace());
-    shared.append_line();
-    shared.append(R"cs(
-    internal interface IInstanceCache<T>
-        where T : class
-    {
-        void Register(System.IntPtr handle, T instance);
-        void Unregister(System.IntPtr handle);
-        bool TryGet(System.IntPtr handle, out T instance);
-    }
-
-    internal sealed class DefaultInstanceCache<T> : IInstanceCache<T>
-        where T : class
-    {
-        private readonly System.Threading.ReaderWriterLockSlim _lock = new System.Threading.ReaderWriterLockSlim(System.Threading.LockRecursionPolicy.NoRecursion);
-        private readonly System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>> _instances =
-            new System.Collections.Generic.Dictionary<System.IntPtr, System.WeakReference<T>>();
-
-        public void Register(System.IntPtr handle, T instance)
-        {
-            if (handle == System.IntPtr.Zero)
-            {
-                return;
-            }
-            _lock.EnterWriteLock();
-            try
-            {
-                _instances[handle] = new System.WeakReference<T>(instance);
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
-            }
-        }
-
-        public void Unregister(System.IntPtr handle)
-        {
-            if (handle == System.IntPtr.Zero)
-            {
-                return;
-            }
-            _lock.EnterWriteLock();
-            try
-            {
-                _instances.Remove(handle);
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
-            }
-        }
-
-        public bool TryGet(System.IntPtr handle, out T instance)
-        {
-            if (handle == System.IntPtr.Zero)
-            {
-                instance = null!;
-                return false;
-            }
-            _lock.EnterReadLock();
-            try
-            {
-                if (_instances.TryGetValue(handle, out var weak) && weak.TryGetTarget(out instance))
-                {
-                    return true;
-                }
-            }
-            finally
-            {
-                _lock.ExitReadLock();
-            }
-            instance = null!;
-            return false;
-        }
-    }
-    )cs");
-
-    generated_files.push_back(write_csharp_file(output_root, "csbind23.instance_cache.g.cs", shared.str()));
+    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.instance_cache.g.cs"));
 }
 
 void emit_shared_array_interop_types_if_needed(
@@ -634,95 +561,7 @@ void emit_shared_array_interop_types_if_needed(
         return;
     }
 
-    TextWriter shared(1024);
-    shared.append_line_format("namespace {};", shared_support_namespace());
-    shared.append_line();
-    shared.append(R"cs(
-    public static class CsBind23ArrayInterop
-    {
-        public static System.IntPtr IntArrayToNativeFixed(int[] value, int expectedLength)
-        {
-            if (value == null || value.Length != expectedLength)
-            {
-                throw new System.ArgumentException($"Expected array length {expectedLength}", nameof(value));
-            }
-
-            System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * expectedLength);
-            System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, expectedLength);
-            return ptr;
-        }
-
-        public static System.IntPtr IntArrayToNativeCounted(int[] value, int count, string paramName)
-        {
-            if (value == null)
-            {
-                throw new System.ArgumentNullException(paramName);
-            }
-            if (count < 0 || count > value.Length)
-            {
-                throw new System.ArgumentOutOfRangeException(paramName, $"Count {count} must be between 0 and array length {value.Length}.");
-            }
-            if (count == 0)
-            {
-                return System.IntPtr.Zero;
-            }
-
-            System.IntPtr ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(sizeof(int) * count);
-            System.Runtime.InteropServices.Marshal.Copy(value, 0, ptr, count);
-            return ptr;
-        }
-
-        public static int[] NativeToNewIntArrayFixed(System.IntPtr ptr, int expectedLength)
-        {
-            int[] value = new int[expectedLength];
-            if (ptr != System.IntPtr.Zero)
-            {
-                System.Runtime.InteropServices.Marshal.Copy(ptr, value, 0, expectedLength);
-            }
-            return value;
-        }
-
-        public static void NativeToExistingIntArrayFixed(System.IntPtr ptr, int[] target, int expectedLength)
-        {
-            if (ptr == System.IntPtr.Zero)
-            {
-                return;
-            }
-            if (target == null || target.Length != expectedLength)
-            {
-                throw new System.ArgumentException($"Expected array length {expectedLength}", nameof(target));
-            }
-            System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, expectedLength);
-        }
-
-        public static void NativeToExistingIntArrayCounted(System.IntPtr ptr, int[] target, int count, string paramName)
-        {
-            if (target == null)
-            {
-                throw new System.ArgumentNullException(paramName);
-            }
-            if (count < 0 || count > target.Length)
-            {
-                throw new System.ArgumentOutOfRangeException(paramName, $"Count {count} must be between 0 and array length {target.Length}.");
-            }
-            if (ptr == System.IntPtr.Zero || count == 0)
-            {
-                return;
-            }
-            System.Runtime.InteropServices.Marshal.Copy(ptr, target, 0, count);
-        }
-
-        public static void FreeNativeBuffer(System.IntPtr ptr)
-        {
-            if (ptr != System.IntPtr.Zero)
-            {
-                System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
-            }
-        }
-    }
-    )cs");
-
-    generated_files.push_back(write_csharp_file(output_root, "csbind23.array.g.cs", shared.str()));
+    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.array.g.cs"));
 }
 
 void emit_shared_item_ownership_type_if_needed(
@@ -734,88 +573,7 @@ void emit_shared_item_ownership_type_if_needed(
         return;
     }
 
-    TextWriter shared(1024);
-    shared.append_line_format("namespace {};", shared_support_namespace());
-    shared.append_line();
-    shared.append(R"cs(
-public enum ItemOwnership
-{
-    Borrowed = 0,
-    Owned = 1,
-}
-
-public abstract class CsBind23Object : System.IDisposable
-{
-    internal System.Runtime.InteropServices.HandleRef _cPtr;
-    protected ItemOwnership _ownership;
-
-    protected CsBind23Object(System.IntPtr handle, ItemOwnership ownership)
-    {
-        _cPtr = new System.Runtime.InteropServices.HandleRef(this, handle);
-        _ownership = ownership;
-    }
-
-    protected void SetHandle(System.IntPtr handle, ItemOwnership ownership)
-    {
-        _cPtr = new System.Runtime.InteropServices.HandleRef(this, handle);
-        _ownership = ownership;
-    }
-
-    protected void TakeOwnershipCore()
-    {
-        if (_cPtr.Handle == System.IntPtr.Zero)
-        {
-            return;
-        }
-
-        _ownership = ItemOwnership.Owned;
-    }
-
-    protected void ReleaseOwnershipCore()
-    {
-        _ownership = ItemOwnership.Borrowed;
-    }
-
-    protected void ReleaseUnmanagedCore()
-    {
-        ReleaseHandle(_ownership);
-    }
-
-    protected void DestroyOwnedHandleCore()
-    {
-        ReleaseHandle(ItemOwnership.Owned);
-        System.GC.SuppressFinalize(this);
-    }
-
-    private void ReleaseHandle(ItemOwnership ownership)
-    {
-        if (_cPtr.Handle == System.IntPtr.Zero)
-        {
-            return;
-        }
-
-        var handle = _cPtr.Handle;
-        ReleaseNativeHandle(handle, ownership);
-        _cPtr = new System.Runtime.InteropServices.HandleRef(this, System.IntPtr.Zero);
-        _ownership = ItemOwnership.Borrowed;
-    }
-
-    protected abstract void ReleaseNativeHandle(System.IntPtr handle, ItemOwnership ownership);
-
-    public void Dispose()
-    {
-        ReleaseUnmanagedCore();
-        System.GC.SuppressFinalize(this);
-    }
-
-    ~CsBind23Object()
-    {
-        ReleaseUnmanagedCore();
-    }
-}
-)cs");
-
-    generated_files.push_back(write_csharp_file(output_root, "csbind23.ownership.g.cs", shared.str()));
+    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.ownership.g.cs"));
 }
 
 std::string pinvoke_return_type(const FunctionDecl& function_decl)
@@ -4030,6 +3788,7 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::vector<std::filesystem::path> generated_files;
     emit_shared_item_ownership_type_if_needed(module_decl, output_root, generated_files);
     emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
+    emit_shared_string_view_wrapper_if_needed(module_decl, output_root, generated_files);
     emit_shared_instance_cache_types_if_needed(module_decl, output_root, generated_files);
     emit_shared_array_interop_types_if_needed(module_decl, output_root, generated_files);
 

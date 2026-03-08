@@ -1,4 +1,5 @@
 using CsBind23.Tests.E2E.String;
+using System.Text;
 using Xunit;
 
 namespace CsBind23.Tests.E2E
@@ -34,8 +35,53 @@ namespace CsBind23.Tests.E2E
         [Fact]
         public void StringView_ParameterAndReturn_MapToString()
         {
-            Assert.Equal("hello|view", StringApi.string_consume_string_view("hello"));
-            Assert.Equal("view-return", StringApi.string_get_string_view());
+            using (var owner = new Std.String("hello"))
+            {
+                Std.String echoed = StringApi.string_consume_string_view(owner.AsView());
+                Std.StringView returned = StringApi.string_get_string_view();
+
+                Assert.Equal("hello|view", echoed.ToString());
+                Assert.Equal("view-return", returned.ToString());
+            }
+        }
+
+        [Fact]
+        public void StringView_Can_Be_Borrowed_From_StdString()
+        {
+            using var owner = new Std.String("borrowed");
+            Std.StringView view = owner.AsView();
+
+            Assert.Equal("borrowed", view.ToString());
+            Assert.True(view == owner);
+        }
+
+        [Fact]
+        public void StringView_Is_NeverOwning_And_Reflects_Native_Source()
+        {
+            Std.StringView value = StringApi.string_get_live_string_view();
+
+            Assert.Equal("live-view", value.ToString());
+            Assert.False(value.IsNull);
+            Assert.True(value.str != System.IntPtr.Zero);
+            Assert.Equal((nuint)9, value.length);
+
+            using var lease = StringViewTestUtils.Lease("next-view");
+            StringApi.string_set_live_string_view(lease.View);
+
+            Assert.Equal("next-view", value.ToString());
+        }
+
+        [Fact]
+        public void StringView_Bytewise_Comparison_Works_With_Spans_And_StdString()
+        {
+            using var owner = new Std.String("hello");
+            Std.StringView view = owner.AsView();
+            byte[] same = Encoding.UTF8.GetBytes("hello");
+            byte[] other = Encoding.UTF8.GetBytes("world");
+
+            Assert.True(view.Equals((ReadOnlySpan<byte>)same));
+            Assert.False(view.Equals((ReadOnlySpan<byte>)other));
+            Assert.Equal(0, view.CompareTo(owner));
         }
 
         [Fact]
