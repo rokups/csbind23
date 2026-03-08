@@ -68,6 +68,8 @@ template <typename Type> struct Converter
     static constexpr std::string_view c_abi_type_name() { return "void*"; }
     static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
     static constexpr std::string_view managed_type_name() { return ""; }
+    static constexpr std::string_view managed_marshaller_type_name() { return ""; }
+    static constexpr std::string_view managed_pinvoke_attribute() { return ""; }
     static constexpr std::string_view managed_to_pinvoke_expression() { return ""; }
     static constexpr std::string_view managed_from_pinvoke_expression() { return ""; }
     static constexpr std::string_view managed_finalize_to_pinvoke_statement() { return ""; }
@@ -114,6 +116,10 @@ template <> struct Converter<bool>
 
     static constexpr std::string_view c_abi_type_name() { return "bool"; }
     static constexpr std::string_view pinvoke_type_name() { return "bool"; }
+    static constexpr std::string_view managed_pinvoke_attribute()
+    {
+        return "global::System.Runtime.InteropServices.MarshalAs(global::System.Runtime.InteropServices.UnmanagedType.I1)";
+    }
     static c_abi_type to_c_abi(const cpp_type& value) { return value; }
     static cpp_type from_c_abi(const c_abi_type& value) { return value; }
 };
@@ -136,6 +142,10 @@ template <> struct Converter<char16_t>
 
     static constexpr std::string_view c_abi_type_name() { return "char16_t"; }
     static constexpr std::string_view pinvoke_type_name() { return "char"; }
+    static constexpr std::string_view managed_pinvoke_attribute()
+    {
+        return "global::System.Runtime.InteropServices.MarshalAs(global::System.Runtime.InteropServices.UnmanagedType.U2)";
+    }
     static c_abi_type to_c_abi(const cpp_type& value) { return value; }
     static cpp_type from_c_abi(const c_abi_type& value) { return value; }
 };
@@ -432,19 +442,16 @@ template <> struct Converter<const char*>
     using c_abi_type = const char*;
 
     static constexpr std::string_view c_abi_type_name() { return "const char*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_param_type_name() { return "string"; }
+    static constexpr std::string_view pinvoke_return_type_name() { return "string"; }
     static constexpr std::string_view managed_type_name() { return "string"; }
-    static constexpr std::string_view managed_to_pinvoke_expression()
+    static constexpr std::string_view managed_param_marshaller_type_name()
     {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} ?? string.Empty)";
+        return "global::CsBind23.Generated.CsBind23Utf8StringMarshaller";
     }
-    static constexpr std::string_view managed_from_pinvoke_expression()
+    static constexpr std::string_view managed_return_marshaller_type_name()
     {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value})";
-    }
-    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
-    {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+        return "global::CsBind23.Generated.CsBind23Utf8StringReturnMarshaller";
     }
 
     static c_abi_type to_c_abi(cpp_type value) { return value; }

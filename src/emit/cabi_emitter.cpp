@@ -331,9 +331,21 @@ void append_director_method_override(TextWriter& output, const ClassDecl& class_
             "            auto __csbind23_callback_result = callbacks_.{}({});",
             method_decl.virtual_slot_name,
             callback_args);
-        output.append_line_format(
-            "            return csbind23::cabi::detail::from_c_abi_for<{}>(__csbind23_callback_result);",
-            render_cpp_type(method_decl.return_type));
+        if (method_decl.return_type.cpp_name == "std::string" && !method_decl.return_type.is_pointer
+            && !method_decl.return_type.is_reference)
+        {
+            output.append_line_format(
+                "            auto __csbind23_marshaled_result = csbind23::cabi::detail::from_c_abi_for<{}>(__csbind23_callback_result);",
+                render_cpp_type(method_decl.return_type));
+            output.append_line("            csbind23::detail::temporary_memory_free(const_cast<char*>(__csbind23_callback_result));");
+            output.append_line("            return __csbind23_marshaled_result;");
+        }
+        else
+        {
+            output.append_line_format(
+                "            return csbind23::cabi::detail::from_c_abi_for<{}>(__csbind23_callback_result);",
+                render_cpp_type(method_decl.return_type));
+        }
     }
 
     output.append_line("        }");

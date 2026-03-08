@@ -2,6 +2,7 @@
 
 #include "csbind23/cabi/converter.hpp"
 
+#include <format>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -83,6 +84,54 @@ struct has_managed_type_name_fn
     }
 };
 
+struct has_managed_marshaller_type_name_fn
+{
+    template <typename Type> constexpr bool operator()() const
+    {
+        return requires { Converter<Type>::managed_marshaller_type_name(); };
+    }
+};
+
+struct has_managed_param_marshaller_type_name_fn
+{
+    template <typename Type> constexpr bool operator()() const
+    {
+        return requires { Converter<Type>::managed_param_marshaller_type_name(); };
+    }
+};
+
+struct has_managed_return_marshaller_type_name_fn
+{
+    template <typename Type> constexpr bool operator()() const
+    {
+        return requires { Converter<Type>::managed_return_marshaller_type_name(); };
+    }
+};
+
+struct has_managed_pinvoke_attribute_fn
+{
+    template <typename Type> constexpr bool operator()() const
+    {
+        return requires { Converter<Type>::managed_pinvoke_attribute(); };
+    }
+};
+
+struct has_managed_pinvoke_param_attribute_fn
+{
+    template <typename Type> constexpr bool operator()() const
+    {
+        return requires { Converter<Type>::managed_pinvoke_param_attribute(); };
+    }
+};
+
+struct has_managed_pinvoke_return_attribute_fn
+{
+    template <typename Type> constexpr bool operator()() const
+    {
+        return requires { Converter<Type>::managed_pinvoke_return_attribute(); };
+    }
+};
+
 struct has_managed_param_type_name_fn
 {
     template <typename Type> constexpr bool operator()() const
@@ -113,6 +162,28 @@ template <typename Type> constexpr void validate_managed_type_names()
 {
     validate_type_name_group<Type, has_managed_type_name_fn, has_managed_param_type_name_fn,
         has_managed_return_type_name_fn>();
+}
+
+template <typename Type> constexpr void validate_managed_marshaller_type_names()
+{
+    constexpr bool has_common = has_managed_marshaller_type_name_fn{}.template operator()<Type>();
+    constexpr bool has_param = has_managed_param_marshaller_type_name_fn{}.template operator()<Type>();
+    constexpr bool has_return = has_managed_return_marshaller_type_name_fn{}.template operator()<Type>();
+
+    static_assert(!(has_common && (has_param || has_return)),
+        "Converter marshaller specification is invalid: use either managed_marshaller_type_name() or the "
+        "managed_param_marshaller_type_name()/managed_return_marshaller_type_name() overrides, but not both.");
+}
+
+template <typename Type> constexpr void validate_managed_pinvoke_attributes()
+{
+    constexpr bool has_common = has_managed_pinvoke_attribute_fn{}.template operator()<Type>();
+    constexpr bool has_param = has_managed_pinvoke_param_attribute_fn{}.template operator()<Type>();
+    constexpr bool has_return = has_managed_pinvoke_return_attribute_fn{}.template operator()<Type>();
+
+    static_assert(!(has_common && (has_param || has_return)),
+        "Converter P/Invoke attribute specification is invalid: use either managed_pinvoke_attribute() or the "
+        "managed_pinvoke_param_attribute()/managed_pinvoke_return_attribute() overrides, but not both.");
 }
 
 template <typename Type> std::string converter_c_abi_type_name_or_empty()
@@ -176,6 +247,50 @@ template <typename Type> std::string converter_managed_type_name_or_empty()
     if constexpr (requires { Converter<Type>::managed_return_type_name(); })
     {
         return std::string(Converter<Type>::managed_return_type_name());
+    }
+
+    return {};
+}
+
+template <typename Type> std::string converter_managed_marshaller_type_name_or_empty()
+{
+    validate_managed_marshaller_type_names<Type>();
+
+    if constexpr (requires { Converter<Type>::managed_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_marshaller_type_name());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_param_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_param_marshaller_type_name());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_return_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_return_marshaller_type_name());
+    }
+
+    return {};
+}
+
+template <typename Type> std::string converter_managed_pinvoke_attribute_or_empty()
+{
+    validate_managed_pinvoke_attributes<Type>();
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_attribute());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_param_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_param_attribute());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_return_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_return_attribute());
     }
 
     return {};
@@ -314,6 +429,84 @@ template <typename Type> std::string managed_return_type_name_for()
     }
 
     return managed_type_name_for<Type>();
+}
+
+template <typename Type> std::string managed_param_marshaller_type_name_for()
+{
+    validate_managed_marshaller_type_names<Type>();
+
+    if constexpr (requires { Converter<Type>::managed_param_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_param_marshaller_type_name());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_marshaller_type_name());
+    }
+
+    return {};
+}
+
+template <typename Type> std::string managed_return_marshaller_type_name_for()
+{
+    validate_managed_marshaller_type_names<Type>();
+
+    if constexpr (requires { Converter<Type>::managed_return_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_return_marshaller_type_name());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_marshaller_type_name(); })
+    {
+        return std::string(Converter<Type>::managed_marshaller_type_name());
+    }
+
+    return {};
+}
+
+template <typename Type> std::string managed_param_pinvoke_attribute_for()
+{
+    validate_managed_pinvoke_attributes<Type>();
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_param_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_param_attribute());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_attribute());
+    }
+
+    if (const std::string marshaller = managed_param_marshaller_type_name_for<Type>(); !marshaller.empty())
+    {
+        return std::format("global::System.Runtime.InteropServices.Marshalling.MarshalUsing(typeof({}))", marshaller);
+    }
+
+    return {};
+}
+
+template <typename Type> std::string managed_return_pinvoke_attribute_for()
+{
+    validate_managed_pinvoke_attributes<Type>();
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_return_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_return_attribute());
+    }
+
+    if constexpr (requires { Converter<Type>::managed_pinvoke_attribute(); })
+    {
+        return std::string(Converter<Type>::managed_pinvoke_attribute());
+    }
+
+    if (const std::string marshaller = managed_return_marshaller_type_name_for<Type>(); !marshaller.empty())
+    {
+        return std::format("global::System.Runtime.InteropServices.Marshalling.MarshalUsing(typeof({}))", marshaller);
+    }
+
+    return {};
 }
 
 template <typename Type> std::string managed_to_pinvoke_expression_for()

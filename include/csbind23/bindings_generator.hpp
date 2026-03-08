@@ -476,6 +476,9 @@ private:
         type_ref.managed_type_name = for_return_type
             ? std::string(cabi::detail::managed_return_type_name_for<Type>())
             : std::string(cabi::detail::managed_param_type_name_for<Type>());
+        type_ref.pinvoke_attribute = for_return_type
+            ? std::string(cabi::detail::managed_return_pinvoke_attribute_for<Type>())
+            : std::string(cabi::detail::managed_param_pinvoke_attribute_for<Type>());
         type_ref.managed_to_pinvoke_expression =
             std::string(cabi::detail::managed_to_pinvoke_expression_for<Type>());
         type_ref.managed_from_pinvoke_expression =
@@ -852,30 +855,20 @@ private:
         const std::string qualified_managed_class = "global::" + csharp_namespace + "." + managed_class;
 
         type_ref.managed_type_name = qualified_managed_class;
+        type_ref.pinvoke_name = qualified_managed_class;
 
         if (!type_ref.is_pointer && !type_ref.is_reference)
         {
-            type_ref.managed_to_pinvoke_expression =
-                "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({value} is null ? string.Empty : {value}.ToString())";
-            type_ref.managed_from_pinvoke_expression =
-                qualified_managed_class + ".FromManaged(global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value}))";
-            type_ref.managed_finalize_to_pinvoke_statement =
-                "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
-            type_ref.managed_finalize_from_pinvoke_statement =
-                "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+            type_ref.pinvoke_attribute =
+                "global::System.Runtime.InteropServices.Marshalling.MarshalUsing(typeof(global::CsBind23.Generated.CsBind23StdStringValueMarshaller))";
             return;
         }
 
         if (type_ref.is_reference || type_ref.is_pointer)
         {
-            type_ref.managed_to_pinvoke_expression = "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
-
-            if (!type_ref.is_const)
-            {
-                type_ref.managed_finalize_to_pinvoke_statement = "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
-            }
-
-            type_ref.managed_from_pinvoke_expression = qualified_managed_class + ".FromBorrowedHandle({value})";
+            type_ref.pinvoke_attribute = !type_ref.is_const
+                ? "global::System.Runtime.InteropServices.Marshalling.MarshalUsing(typeof(global::CsBind23.Generated.CsBind23StdStringMutableHandleMarshaller))"
+                : "global::System.Runtime.InteropServices.Marshalling.MarshalUsing(typeof(global::CsBind23.Generated.CsBind23StdStringHandleMarshaller))";
         }
     }
 

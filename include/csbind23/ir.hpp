@@ -100,6 +100,7 @@ struct TypeRef
     std::string cpp_full_type;
     std::string c_abi_name;
     std::string pinvoke_name;
+    std::string pinvoke_attribute;
     std::string managed_type_name;
     std::string managed_array_element_type_name;
     std::string managed_to_pinvoke_expression;
@@ -124,7 +125,7 @@ struct TypeRef
     {
         return callable_signature != nullptr || !managed_type_name.empty() || !managed_to_pinvoke_expression.empty()
             || !managed_from_pinvoke_expression.empty() || !managed_finalize_to_pinvoke_statement.empty()
-            || !managed_finalize_from_pinvoke_statement.empty();
+            || !managed_finalize_from_pinvoke_statement.empty() || !pinvoke_attribute.empty();
     }
 };
 

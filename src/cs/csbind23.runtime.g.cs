@@ -1,0 +1,1 @@
+[assembly: global::System.Runtime.CompilerServices.DisableRuntimeMarshalling]

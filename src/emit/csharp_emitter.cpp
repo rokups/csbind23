@@ -65,9 +65,37 @@ std::string wrap_polymorphic_method_name(const ModuleDecl& module_decl, const Cl
     return format_csharp_name(module_decl, CSharpNameKind::Class, "WrapPolymorphic_" + class_decl.name);
 }
 
-constexpr std::string_view pinvoke_library_constant_name()
+constexpr std::string_view native_library_constant_name()
 {
-    return "DllImportLibrary";
+    return "NativeLibrary";
+}
+
+void append_library_import_attributes(
+    TextWriter& output,
+    std::string_view indent,
+    const std::string& exported_name,
+    std::string_view return_attribute = {})
+{
+    if (!return_attribute.empty())
+    {
+        output.append_line_format("{}[return: {}]", indent, return_attribute);
+    }
+    output.append_line_format(
+        "{}[System.Runtime.InteropServices.LibraryImport({}, EntryPoint = \"{}\")]",
+        indent,
+        native_library_constant_name(),
+        exported_name);
+    output.append_line_format(
+        "{}[System.Runtime.InteropServices.UnmanagedCallConv(CallConvs = new[] {{ typeof(System.Runtime.CompilerServices.CallConvCdecl) }})]",
+        indent);
+}
+
+void append_marshaled_parameter_prefix(TextWriter& output, const TypeRef& type_ref)
+{
+    if (!type_ref.pinvoke_attribute.empty())
+    {
+        output.append_format("[{}] ", type_ref.pinvoke_attribute);
+    }
 }
 
 std::string wrapper_type_name(const TypeRef& type_ref);
@@ -285,32 +313,42 @@ void append_callable_support(TextWriter& output, const ModuleDecl& module_decl, 
         type_ref.callable_id);
     output.append_line();
 
+    append_library_import_attributes(
+        output,
+        "    ",
+        std::format("{}_{}", module_decl.name, callable_create_export_name(type_ref)));
     output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library_constant_name());
-    output.append_line_format(
-        "    internal static extern System.IntPtr {}_{}(System.IntPtr functionPtr, System.IntPtr managedLifetime, System.IntPtr release);",
+        "    internal static partial System.IntPtr {}_{}(System.IntPtr functionPtr, System.IntPtr managedLifetime, System.IntPtr release);",
         module_decl.name,
         callable_create_export_name(type_ref));
-    output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library_constant_name());
+    append_library_import_attributes(
+        output,
+        "    ",
+        std::format("{}_{}", module_decl.name, callable_invoke_export_name(type_ref)),
+        signature.return_type.pinvoke_attribute);
     output.append_format(
-        "    internal static extern {} {}_{}(System.IntPtr callable",
+        "    internal static partial {} {}_{}(System.IntPtr callable",
         signature.return_type.pinvoke_name,
         module_decl.name,
         callable_invoke_export_name(type_ref));
     for (std::size_t index = 0; index < signature.parameter_types.size(); ++index)
     {
         const auto& parameter_type = signature.parameter_types[index];
-        output.append_format(", {}{} {}", callable_pinvoke_byref_keyword(parameter_type), parameter_type.pinvoke_name, callable_argument_name(index));
+        output.append(", ");
+        append_marshaled_parameter_prefix(output, parameter_type);
+        output.append_format(
+            "{}{} {}",
+            callable_pinvoke_byref_keyword(parameter_type),
+            parameter_type.pinvoke_name,
+            callable_argument_name(index));
     }
     output.append_line(");");
+    append_library_import_attributes(
+        output,
+        "    ",
+        std::format("{}_{}", module_decl.name, callable_release_export_name(type_ref)));
     output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library_constant_name());
-    output.append_line_format(
-        "    internal static extern void {}_{}(System.IntPtr callable);",
+        "    internal static partial void {}_{}(System.IntPtr callable);",
         module_decl.name,
         callable_release_export_name(type_ref));
     output.append_line();
@@ -655,6 +693,45 @@ bool is_pinvoke_int_ptr(std::string_view pinvoke_name)
 bool is_cpp_std_string(std::string_view cpp_name)
 {
     return cpp_name == "std::string";
+}
+
+bool callback_uses_manual_std_string_marshalling(const TypeRef& type_ref)
+{
+    return is_cpp_std_string(type_ref.cpp_name) && type_ref.pinvoke_attribute.find("CsBind23StdString") != std::string::npos;
+}
+
+std::string callback_native_type_name(const TypeRef& type_ref)
+{
+    if (callback_uses_manual_std_string_marshalling(type_ref))
+    {
+        return "System.IntPtr";
+    }
+
+    return type_ref.pinvoke_name;
+}
+
+std::string callback_std_string_from_native_expression(const TypeRef& type_ref, std::string_view value_expression)
+{
+    if (type_ref.is_pointer || type_ref.is_reference)
+    {
+        return std::format("global::Std.String.FromBorrowedHandle({})", value_expression);
+    }
+
+    return std::format(
+        "global::Std.String.FromManaged(global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({}))",
+        value_expression);
+}
+
+std::string callback_std_string_to_native_expression(const TypeRef& type_ref, std::string_view value_expression)
+{
+    if (type_ref.is_pointer || type_ref.is_reference)
+    {
+        return std::format("({0} is null ? System.IntPtr.Zero : {0}.EnsureHandle())", value_expression);
+    }
+
+    return std::format(
+        "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative({0} is null ? string.Empty : {0}.ToString())",
+        value_expression);
 }
 
 std::optional<std::string_view> pinvoke_integral_type_from_cabi(std::string_view c_abi_name)
@@ -3494,16 +3571,11 @@ std::string virtual_mask_test_expression(std::string_view instance_prefix, std::
         virtual_mask_bit_literal(virtual_index));
 }
 
-void append_native_signature(TextWriter& output, const FunctionDecl& function_decl, std::string_view pinvoke_library,
-    const std::string& exported_name, bool include_self,
+void append_native_signature(TextWriter& output, const FunctionDecl& function_decl, const std::string& exported_name, bool include_self,
     std::size_t parameter_count = std::numeric_limits<std::size_t>::max())
 {
-    (void)pinvoke_library;
-    output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = "
-        "System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library_constant_name());
-    output.append_format("    internal static extern {} {}(", pinvoke_return_type(function_decl), exported_name);
+    append_library_import_attributes(output, "    ", exported_name, function_decl.return_type.pinvoke_attribute);
+    output.append_format("    internal static partial {} {}(", pinvoke_return_type(function_decl), exported_name);
 
     bool needs_separator = false;
     if (include_self)
@@ -3524,7 +3596,14 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
         }
         const std::string pinvoke_parameter_type =
             parameter_is_supported_c_array(parameter) ? "System.IntPtr" : parameter.type.pinvoke_name;
-        output.append_format("{}{} {}", parameter_direct_byref_keyword(parameter), pinvoke_parameter_type,
+        if (!parameter_is_supported_c_array(parameter))
+        {
+            append_marshaled_parameter_prefix(output, parameter.type);
+        }
+        output.append_format(
+            "{}{} {}",
+            parameter_direct_byref_keyword(parameter),
+            pinvoke_parameter_type,
             parameter.name);
         needs_separator = true;
     }
@@ -3533,17 +3612,11 @@ void append_native_signature(TextWriter& output, const FunctionDecl& function_de
     output.append_line();
 }
 
-void append_native_connect_signature(TextWriter& output, std::string_view pinvoke_library,
-    const std::string& exported_name, const std::vector<const FunctionDecl*>& virtual_methods)
+void append_native_connect_signature(TextWriter& output, const std::string& exported_name)
 {
-    (void)virtual_methods;
-    (void)pinvoke_library;
+    append_library_import_attributes(output, "    ", exported_name);
     output.append_line_format(
-        "    [System.Runtime.InteropServices.DllImport({}, CallingConvention = "
-        "System.Runtime.InteropServices.CallingConvention.Cdecl)]",
-        pinvoke_library_constant_name());
-    output.append_line_format(
-        "    internal static extern void {}(System.IntPtr self, System.IntPtr callbacks, nuint callbackCount);",
+        "    internal static partial void {}(System.IntPtr self, System.IntPtr callbacks, nuint callbackCount);",
         exported_name);
     output.append_line();
 }
@@ -3934,11 +4007,11 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
     {
         const auto& method_decl = *virtual_methods[index];
         output.append_line("    [System.Runtime.InteropServices.UnmanagedFunctionPointer(System.Runtime.InteropServices.CallingConvention.Cdecl)]");
-        output.append_format("    private delegate {} {}(System.IntPtr self", method_decl.return_type.pinvoke_name,
+        output.append_format("    private delegate {} {}(System.IntPtr self", callback_native_type_name(method_decl.return_type),
             callback_delegate_name(method_decl, index));
         for (const auto& parameter : method_decl.parameters)
         {
-            output.append_format(", {}{} {}", parameter_direct_byref_keyword(parameter), parameter.type.pinvoke_name,
+            output.append_format(", {}{} {}", parameter_direct_byref_keyword(parameter), callback_native_type_name(parameter.type),
                 parameter.name);
         }
         output.append_line(");");
@@ -3989,10 +4062,10 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         const auto& method_decl = *virtual_methods[index];
         const std::string method_name = callback_method_name(method_decl, index);
 
-        output.append_format("    private static {} {}(System.IntPtr self", method_decl.return_type.pinvoke_name, method_name);
+        output.append_format("    private static {} {}(System.IntPtr self", callback_native_type_name(method_decl.return_type), method_name);
         for (const auto& parameter : method_decl.parameters)
         {
-            output.append_format(", {}{} {}", parameter_direct_byref_keyword(parameter), parameter.type.pinvoke_name,
+            output.append_format(", {}{} {}", parameter_direct_byref_keyword(parameter), callback_native_type_name(parameter.type),
                 parameter.name);
         }
         output.append_line(")");
@@ -4031,6 +4104,15 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
             output.append_line_format("            {} ;", base_native_call);
             output.append_line("            return;");
         }
+        else if (callback_uses_manual_std_string_marshalling(method_decl.return_type))
+        {
+            output.append_line_format(
+                "            {} __csbind23_base_result = {};",
+                wrapper_return_type(module_decl, method_decl),
+                base_native_call);
+            append_embedded_return(output, "            ",
+                callback_std_string_to_native_expression(method_decl.return_type, "__csbind23_base_result"));
+        }
         else
         {
             output.append_line_format("            return {};", base_native_call);
@@ -4042,7 +4124,17 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
         for (std::size_t p = 0; p < method_decl.parameters.size(); ++p)
         {
             const auto& parameter = method_decl.parameters[p];
-            if (!parameter.type.managed_from_pinvoke_expression.empty())
+            if (callback_uses_manual_std_string_marshalling(parameter.type))
+            {
+                const std::string managed_name = std::format("__csbind23_arg{}_managed", p);
+                append_embedded_assignment(
+                    output,
+                    "        ",
+                    std::format("{} {} = ", wrapper_type_name(parameter.type), managed_name),
+                    callback_std_string_from_native_expression(parameter.type, parameter.name));
+                managed_args.push_back(managed_name);
+            }
+            else if (!parameter.type.managed_from_pinvoke_expression.empty())
             {
                 const std::string managed_name = std::format("__csbind23_arg{}_managed", p);
                 append_embedded_assignment(
@@ -4082,7 +4174,12 @@ void append_virtual_director_support(TextWriter& output, const ModuleDecl& modul
                 managed_method_name(module_decl, method_decl),
                 invoke_args);
 
-            if (!method_decl.return_type.managed_to_pinvoke_expression.empty())
+            if (callback_uses_manual_std_string_marshalling(method_decl.return_type))
+            {
+                append_embedded_return(output, "        ",
+                    callback_std_string_to_native_expression(method_decl.return_type, "__csbind23_result"));
+            }
+            else if (!method_decl.return_type.managed_to_pinvoke_expression.empty())
             {
                 append_embedded_return(output, "        ", render_inline_template(
                     method_decl.return_type.managed_to_pinvoke_expression, "__csbind23_result", "__csbind23_result",
@@ -4548,15 +4645,14 @@ std::vector<std::filesystem::path> emit_csharp_module(
 
     generated.append_line_format("namespace {};", csharp_namespace_name(module_decl));
     generated.append_line();
-    generated.append_line_format("internal static class {}", native_class_name(module_decl));
+    generated.append_line_format("internal static partial class {}", native_class_name(module_decl));
     generated.append_line("{");
-    generated.append_line_format("    internal const string {} = \"{}\";", pinvoke_library_constant_name(), module_decl.pinvoke_library);
+    generated.append_line_format("    internal const string {} = \"{}\";", native_library_constant_name(), module_decl.pinvoke_library);
     generated.append_line();
 
     for (const auto& function_decl : module_decl.functions)
     {
-        append_native_signature(generated, function_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + exported_symbol_name(function_decl), false);
+        append_native_signature(generated, function_decl, module_decl.name + "_" + exported_symbol_name(function_decl), false);
 
         const std::size_t defaults = free_function_default_count(module_decl, function_decl);
         for (std::size_t omitted = 1; omitted <= defaults; ++omitted)
@@ -4564,7 +4660,6 @@ std::vector<std::filesystem::path> emit_csharp_module(
             append_native_signature(
                 generated,
                 function_decl,
-                module_decl.pinvoke_library,
                 module_decl.name + "_" + exported_symbol_name(function_decl) + std::format("__default_{}", omitted),
                 false,
                 function_decl.parameters.size() - omitted);
@@ -4580,14 +4675,12 @@ std::vector<std::filesystem::path> emit_csharp_module(
         FunctionDecl type_name_decl;
         type_name_decl.return_type.c_abi_name = "int";
         type_name_decl.return_type.pinvoke_name = "int";
-        append_native_signature(generated, type_name_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + class_decl.name + "_static_type_id", false);
+        append_native_signature(generated, type_name_decl, module_decl.name + "_" + class_decl.name + "_static_type_id", false);
 
         FunctionDecl dynamic_type_name_decl;
         dynamic_type_name_decl.return_type.c_abi_name = "int";
         dynamic_type_name_decl.return_type.pinvoke_name = "int";
-        append_native_signature(generated, dynamic_type_name_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + class_decl.name + "_dynamic_type_id", true);
+        append_native_signature(generated, dynamic_type_name_decl, module_decl.name + "_" + class_decl.name + "_dynamic_type_id", true);
 
         FunctionDecl cast_decl;
         cast_decl.return_type.c_abi_name = "void*";
@@ -4597,50 +4690,42 @@ std::vector<std::filesystem::path> emit_csharp_module(
         cast_target_type_id.type.c_abi_name = "int";
         cast_target_type_id.type.pinvoke_name = "int";
         cast_decl.parameters.push_back(std::move(cast_target_type_id));
-        append_native_signature(generated, cast_decl, module_decl.pinvoke_library,
-            module_decl.name + "_" + class_decl.name + "_cast", true);
+        append_native_signature(generated, cast_decl, module_decl.name + "_" + class_decl.name + "_cast", true);
 
         if (class_has_owned_ctor(class_decl))
         {
             FunctionDecl destroy_decl;
             destroy_decl.return_type.c_abi_name = "void";
             destroy_decl.return_type.pinvoke_name = "void";
-            append_native_signature(generated, destroy_decl, module_decl.pinvoke_library,
-                module_decl.name + "_" + class_decl.name + "_destroy", true);
+            append_native_signature(generated, destroy_decl, module_decl.name + "_" + class_decl.name + "_destroy", true);
         }
 
         if (!virtual_methods.empty())
         {
-            append_native_connect_signature(generated, module_decl.pinvoke_library,
-                module_decl.name + "_" + class_decl.name + "_connect_director", virtual_methods);
+            append_native_connect_signature(generated, module_decl.name + "_" + class_decl.name + "_connect_director");
 
             FunctionDecl disconnect_decl;
             disconnect_decl.return_type.c_abi_name = "void";
             disconnect_decl.return_type.pinvoke_name = "void";
-            append_native_signature(generated, disconnect_decl, module_decl.pinvoke_library,
-                module_decl.name + "_" + class_decl.name + "_disconnect_director", true);
+            append_native_signature(generated, disconnect_decl, module_decl.name + "_" + class_decl.name + "_disconnect_director", true);
         }
 
         for (const auto& method_decl : class_decl.methods)
         {
             if (method_decl.is_constructor)
             {
-                append_native_signature(
-                    generated, method_decl, module_decl.pinvoke_library,
-                    module_decl.name + "_" + class_decl.name + "_create", false);
+                append_native_signature(generated, method_decl, module_decl.name + "_" + class_decl.name + "_create", false);
             }
         }
 
         for (const auto& emitted_method : emitted_methods)
         {
             const auto& method_decl = emitted_method.method;
-            append_native_signature(generated, method_decl, module_decl.pinvoke_library,
-                module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl), true);
+            append_native_signature(generated, method_decl, module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl), true);
 
             if (!virtual_methods.empty() && method_decl.allow_override)
             {
-                append_native_signature(generated, method_decl, module_decl.pinvoke_library,
-                    module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl) + "__base", true);
+                append_native_signature(generated, method_decl, module_decl.name + "_" + class_decl.name + "_" + exported_symbol_name(method_decl) + "__base", true);
             }
         }
     }

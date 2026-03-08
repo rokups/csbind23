@@ -317,23 +317,11 @@ template <> struct Converter<std::string>
     using c_abi_type = const char*;
 
     static constexpr std::string_view c_abi_type_name() { return "const char*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_type_name() { return detail::std_string_wrapper_managed_type_name(); }
     static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
-    static constexpr std::string_view managed_to_pinvoke_expression()
+    static constexpr std::string_view managed_marshaller_type_name()
     {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.StringToNative(({value} is null ? string.Empty : {value}.ToString()))";
-    }
-    static constexpr std::string_view managed_from_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.Std.String.FromManaged(global::CsBind23.Generated.CsBind23Utf8Interop.NativeToString({value}))";
-    }
-    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
-    {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
-    }
-    static constexpr std::string_view managed_finalize_from_pinvoke_statement()
-    {
-        return "global::CsBind23.Generated.CsBind23Utf8Interop.Free({pinvoke})";
+        return "global::CsBind23.Generated.CsBind23StdStringValueMarshaller";
     }
 
     static c_abi_type to_c_abi(const cpp_type& value)
@@ -356,19 +344,11 @@ template <> struct Converter<std::string&>
     using c_abi_type = void*;
 
     static constexpr std::string_view c_abi_type_name() { return "void*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_type_name() { return detail::std_string_wrapper_managed_type_name(); }
     static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
-    static constexpr std::string_view managed_to_pinvoke_expression()
+    static constexpr std::string_view managed_marshaller_type_name()
     {
-        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
-    }
-    static constexpr std::string_view managed_from_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
-    }
-    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
-    {
-        return "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
+        return "global::CsBind23.Generated.CsBind23StdStringMutableHandleMarshaller";
     }
 
     static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
@@ -381,15 +361,11 @@ template <> struct Converter<const std::string&>
     using c_abi_type = const void*;
 
     static constexpr std::string_view c_abi_type_name() { return "const void*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_type_name() { return detail::std_string_wrapper_managed_type_name(); }
     static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
-    static constexpr std::string_view managed_to_pinvoke_expression()
+    static constexpr std::string_view managed_marshaller_type_name()
     {
-        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
-    }
-    static constexpr std::string_view managed_from_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
+        return "global::CsBind23.Generated.CsBind23StdStringHandleMarshaller";
     }
 
     static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(&value); }
@@ -402,19 +378,11 @@ template <> struct Converter<std::string*>
     using c_abi_type = void*;
 
     static constexpr std::string_view c_abi_type_name() { return "void*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_type_name() { return detail::std_string_wrapper_managed_type_name(); }
     static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
-    static constexpr std::string_view managed_to_pinvoke_expression()
+    static constexpr std::string_view managed_marshaller_type_name()
     {
-        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
-    }
-    static constexpr std::string_view managed_from_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
-    }
-    static constexpr std::string_view managed_finalize_to_pinvoke_statement()
-    {
-        return "if ({managed} is not null)\n{\n    {managed}.InvalidateManagedCache();\n}";
+        return "global::CsBind23.Generated.CsBind23StdStringMutableHandleMarshaller";
     }
 
     static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
@@ -427,15 +395,11 @@ template <> struct Converter<const std::string*>
     using c_abi_type = const void*;
 
     static constexpr std::string_view c_abi_type_name() { return "const void*"; }
-    static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
+    static constexpr std::string_view pinvoke_type_name() { return detail::std_string_wrapper_managed_type_name(); }
     static constexpr std::string_view managed_type_name() { return detail::std_string_wrapper_managed_type_name(); }
-    static constexpr std::string_view managed_to_pinvoke_expression()
+    static constexpr std::string_view managed_marshaller_type_name()
     {
-        return "({value} is null ? System.IntPtr.Zero : {value}.EnsureHandle())";
-    }
-    static constexpr std::string_view managed_from_pinvoke_expression()
-    {
-        return "global::CsBind23.Generated.Std.String.FromBorrowedHandle({value})";
+        return "global::CsBind23.Generated.CsBind23StdStringHandleMarshaller";
     }
 
     static c_abi_type to_c_abi(cpp_type value) { return static_cast<c_abi_type>(value); }
