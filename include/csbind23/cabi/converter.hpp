@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace csbind23::cabi
 {
@@ -24,6 +25,30 @@ template <typename Type> struct scalar_storage_type<Type, true>
 {
     using type = std::underlying_type_t<Type>;
 };
+
+template <typename Type, typename Value> decltype(auto) to_c_abi_for(Value&& value)
+{
+    if constexpr (requires { Converter<Type>::to_c_abi(std::forward<Value>(value)); })
+    {
+        return Converter<Type>::to_c_abi(std::forward<Value>(value));
+    }
+    else
+    {
+        return std::forward<Value>(value);
+    }
+}
+
+template <typename Type, typename Value> decltype(auto) from_c_abi_for(Value&& value)
+{
+    if constexpr (requires { Converter<Type>::from_c_abi(std::forward<Value>(value)); })
+    {
+        return Converter<Type>::from_c_abi(std::forward<Value>(value));
+    }
+    else
+    {
+        return std::forward<Value>(value);
+    }
+}
 
 } // namespace detail
 
@@ -62,12 +87,12 @@ struct Converter<Type>
 
     static c_abi_type to_c_abi(const cpp_type& value)
     {
-        return Converter<underlying_type>::to_c_abi(static_cast<underlying_type>(value));
+        return detail::to_c_abi_for<underlying_type>(static_cast<underlying_type>(value));
     }
 
     static cpp_type from_c_abi(const c_abi_type& value)
     {
-        return static_cast<cpp_type>(Converter<underlying_type>::from_c_abi(value));
+        return static_cast<cpp_type>(detail::from_c_abi_for<underlying_type>(value));
     }
 };
 
@@ -303,10 +328,8 @@ template <> struct Converter<std::string_view>
     using cpp_type = std::string_view;
     using c_abi_type = StringView;
 
-    static constexpr std::string_view c_abi_type_name() { return "csbind23::cabi::StringView"; }
     static constexpr std::string_view c_abi_param_type_name() { return "const char*"; }
     static constexpr std::string_view c_abi_return_type_name() { return "csbind23::cabi::StringView"; }
-    static constexpr std::string_view pinvoke_type_name() { return "CsBind23StringView"; }
     static constexpr std::string_view pinvoke_param_type_name() { return "System.IntPtr"; }
     static constexpr std::string_view pinvoke_return_type_name() { return "CsBind23StringView"; }
     static constexpr std::string_view managed_type_name() { return "string"; }
@@ -349,10 +372,7 @@ template <std::size_t Extent> struct Converter<std::array<int, Extent>>
     using c_abi_type = const void*;
 
     static constexpr std::string_view c_abi_type_name() { return "const void*"; }
-    static constexpr std::string_view c_abi_return_type_name() { return "const void*"; }
     static constexpr std::string_view pinvoke_type_name() { return "System.IntPtr"; }
-    static constexpr std::string_view pinvoke_param_type_name() { return "System.IntPtr"; }
-    static constexpr std::string_view pinvoke_return_type_name() { return "System.IntPtr"; }
     static constexpr std::string_view managed_type_name() { return "int[]"; }
 
     static std::string managed_to_pinvoke_expression()

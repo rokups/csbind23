@@ -58,7 +58,7 @@ void append_converted_arguments(TextWriter& output, const std::vector<ParameterD
         const auto rendered_cpp_type = render_cpp_type(parameter.type);
 
         output.append_line_format(
-            "    decltype(auto) {} = csbind23::cabi::Converter<{}>::from_c_abi({});",
+            "    decltype(auto) {} = csbind23::cabi::detail::from_c_abi_for<{}>({});",
             converted_name,
             rendered_cpp_type,
             parameter.name);

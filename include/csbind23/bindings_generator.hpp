@@ -269,14 +269,14 @@ public:
     template <typename Type> TypeRef make_bound_param_type_ref(const ModuleDecl* current_module = nullptr) const
     {
         TypeRef type_ref = detail::make_param_type_ref<Type>();
-        apply_managed_converter<Type>(type_ref, current_module);
+        apply_managed_converter<Type>(type_ref, current_module, false);
         return type_ref;
     }
 
     template <typename Type> TypeRef make_bound_return_type_ref(const ModuleDecl* current_module = nullptr) const
     {
         TypeRef type_ref = detail::make_return_type_ref<Type>();
-        apply_managed_converter<Type>(type_ref, current_module);
+        apply_managed_converter<Type>(type_ref, current_module, true);
         return type_ref;
     }
 
@@ -292,9 +292,11 @@ private:
         const ClassDecl* class_decl = nullptr;
     };
 
-    template <typename Type> static void assign_managed_converter(TypeRef& type_ref)
+    template <typename Type> static void assign_managed_converter(TypeRef& type_ref, bool for_return_type)
     {
-        type_ref.managed_type_name = std::string(cabi::detail::managed_type_name_for<Type>());
+        type_ref.managed_type_name = for_return_type
+            ? std::string(cabi::detail::managed_return_type_name_for<Type>())
+            : std::string(cabi::detail::managed_param_type_name_for<Type>());
         type_ref.managed_to_pinvoke_expression =
             std::string(cabi::detail::managed_to_pinvoke_expression_for<Type>());
         type_ref.managed_from_pinvoke_expression =
@@ -445,7 +447,8 @@ private:
             ownership_literal);
     }
 
-    template <typename Type> void apply_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module) const
+    template <typename Type>
+    void apply_managed_converter(TypeRef& type_ref, const ModuleDecl* current_module, bool for_return_type) const
     {
         assign_bound_std_string_managed_converter<Type>(type_ref, current_module);
         if (type_ref.has_managed_converter())
@@ -453,7 +456,7 @@ private:
             return;
         }
 
-        assign_managed_converter<Type>(type_ref);
+        assign_managed_converter<Type>(type_ref, for_return_type);
         if (type_ref.has_managed_converter())
         {
             return;
@@ -463,7 +466,7 @@ private:
         using Bare = std::remove_cv_t<NoRef>;
         if constexpr (!std::is_same_v<Bare, Type>)
         {
-            assign_managed_converter<Bare>(type_ref);
+            assign_managed_converter<Bare>(type_ref, for_return_type);
             if (type_ref.has_managed_converter())
             {
                 return;
@@ -473,7 +476,7 @@ private:
         using Base = std::remove_cv_t<std::remove_pointer_t<Bare>>;
         if constexpr (!std::is_same_v<Base, Bare>)
         {
-            assign_managed_converter<Base>(type_ref);
+            assign_managed_converter<Base>(type_ref, for_return_type);
             if (type_ref.has_managed_converter())
             {
                 return;

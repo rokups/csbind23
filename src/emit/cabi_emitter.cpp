@@ -63,7 +63,7 @@ void append_free_function_body(TextWriter& output, const FunctionDecl& function_
 
     output.append_line_format("    decltype(auto) result = {}({});", function_decl.cpp_symbol, call_arguments);
     output.append_line_format(
-        "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(function_decl.return_type));
+        "    return csbind23::cabi::detail::to_c_abi_for<{}>(result);", render_cpp_type(function_decl.return_type));
 }
 
 void append_virtual_callback_typedef(
@@ -122,7 +122,7 @@ void append_director_method_override(TextWriter& output, const ClassDecl& class_
     {
         const auto& parameter = method_decl.parameters[index];
         output.append_line_format(
-            "            {} {} = csbind23::cabi::Converter<{}>::to_c_abi({});",
+            "            {} {} = csbind23::cabi::detail::to_c_abi_for<{}>({});",
             parameter.type.c_abi_name,
             render_callback_argument_name(index),
             render_cpp_type(parameter.type),
@@ -148,7 +148,7 @@ void append_director_method_override(TextWriter& output, const ClassDecl& class_
             method_decl.virtual_slot_name,
             callback_args);
         output.append_line_format(
-            "            return csbind23::cabi::Converter<{}>::from_c_abi(__csbind23_callback_result);",
+            "            return csbind23::cabi::detail::from_c_abi_for<{}>(__csbind23_callback_result);",
             render_cpp_type(method_decl.return_type));
     }
 
@@ -260,7 +260,7 @@ void append_constructor_body(TextWriter& output, const std::string& module_name,
     {
         output.append_line_format("    auto* instance = new {}({});", class_decl.cpp_name, call_arguments);
     }
-    output.append_line_format("    return csbind23::cabi::Converter<{}*>::to_c_abi(instance);", class_decl.cpp_name);
+    output.append_line_format("    return csbind23::cabi::detail::to_c_abi_for<{}*>(instance);", class_decl.cpp_name);
 }
 
 void append_method_body(
@@ -270,14 +270,14 @@ void append_method_body(
     if (method_decl.is_const)
     {
         output.append_line_format(
-            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<const {}*>::from_c_abi(self);",
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<const {}*>(self);",
             class_decl.cpp_name);
         output.append_line("    auto* instance = __csbind23_self_cpp;");
     }
     else
     {
         output.append_line_format(
-            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<{}*>(self);",
             class_decl.cpp_name);
         output.append_line("    auto* instance = __csbind23_self_cpp;");
     }
@@ -302,7 +302,7 @@ void append_method_body(
         {
             output.append_line_format("    decltype(auto) result = ({});", field_expression);
             output.append_line_format(
-                "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
+                "    return csbind23::cabi::detail::to_c_abi_for<{}>(result);", render_cpp_type(method_decl.return_type));
             return;
         }
 
@@ -336,7 +336,7 @@ void append_method_body(
 
         output.append_line_format("    decltype(auto) result = {}({});", method_expr, extension_call_arguments);
         output.append_line_format(
-            "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
+            "    return csbind23::cabi::detail::to_c_abi_for<{}>(result);", render_cpp_type(method_decl.return_type));
         return;
     }
 
@@ -348,7 +348,7 @@ void append_method_body(
 
     output.append_line_format("    decltype(auto) result = owner_instance->{}({});", method_expr, call_arguments);
     output.append_line_format(
-        "    return csbind23::cabi::Converter<{}>::to_c_abi(result);", render_cpp_type(method_decl.return_type));
+        "    return csbind23::cabi::detail::to_c_abi_for<{}>(result);", render_cpp_type(method_decl.return_type));
 }
 
 void append_connect_signature(TextWriter& output, const std::string& module_name, const ClassDecl& class_decl,
@@ -364,7 +364,7 @@ void append_connect_body(TextWriter& output, const std::string& module_name, con
     const std::vector<const FunctionDecl*>& virtual_methods)
 {
     output.append_line_format(
-        "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+        "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<{}*>(self);",
         class_decl.cpp_name);
     output.append_line("    auto* instance = __csbind23_self_cpp;");
     output.append_line_format("    auto* director = dynamic_cast<{}_{}_Director*>(instance);", module_name, class_decl.name);
@@ -392,7 +392,7 @@ void append_connect_body(TextWriter& output, const std::string& module_name, con
 void append_disconnect_body(TextWriter& output, const std::string& module_name, const ClassDecl& class_decl)
 {
     output.append_line_format(
-        "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+        "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<{}*>(self);",
         class_decl.cpp_name);
     output.append_line("    auto* instance = __csbind23_self_cpp;");
     output.append_line_format("    auto* director = dynamic_cast<{}_{}_Director*>(instance);", module_name, class_decl.name);
@@ -415,6 +415,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
 
     generated.append(R"cpp(
         #include <csbind23/cabi/converter.hpp>
+        #include <csbind23/detail/converter_internal.hpp>
         #include <cstddef>
         #include <type_traits>
         #include <typeinfo>
@@ -499,7 +500,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
             module_decl.name,
             class_decl.name);
         generated.append_line_format(
-            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<const {}*>::from_c_abi(self);",
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<const {}*>(self);",
             class_decl.cpp_name);
         generated.append(R"cpp(
             if (__csbind23_self_cpp == nullptr)
@@ -524,7 +525,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
             module_decl.name,
             class_decl.name);
         generated.append_line_format(
-            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+            "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<{}*>(self);",
             class_decl.cpp_name);
         generated.append(R"cpp(
             if (__csbind23_self_cpp == nullptr)
@@ -538,7 +539,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
         {
             generated.append_line_format("    case {}:", i);
             generated.append_line_format(
-                "        return csbind23::cabi::Converter<{}*>::to_c_abi(__csbind23_cast_handle<{}>(__csbind23_self_cpp));",
+                "        return csbind23::cabi::detail::to_c_abi_for<{}*>(__csbind23_cast_handle<{}>(__csbind23_self_cpp));",
                 module_decl.classes[i].cpp_name,
                 module_decl.classes[i].cpp_name);
         }
@@ -593,7 +594,7 @@ std::vector<std::filesystem::path> emit_cabi_module(
             generated.append_line_format(
                 "extern \"C\" void {}_{}_destroy(void* self) {{", module_decl.name, class_decl.name);
             generated.append_line_format(
-                "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::Converter<{}*>::from_c_abi(self);",
+                "    decltype(auto) __csbind23_self_cpp = csbind23::cabi::detail::from_c_abi_for<{}*>(self);",
                 class_decl.cpp_name);
             generated.append_line_format("    delete __csbind23_self_cpp;");
             generated.append_line("}");
