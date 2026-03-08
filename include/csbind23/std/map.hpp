@@ -139,187 +139,6 @@ CppSymbols make_associative_helper_cpp_symbols(std::string_view helper_name, std
     return symbols;
 }
 
-inline std::string make_associative_wrapper_csharp_code(std::string_view wrapper_name)
-{
-    std::string code = R"(    public int Count => checked((int)size());
-
-    public bool IsReadOnly => false;
-
-    public System.Collections.Generic.ICollection<T0> Keys => CreateKeysSnapshot();
-
-    public System.Collections.Generic.ICollection<T1> Values => CreateValuesSnapshot();
-
-    System.Collections.Generic.IEnumerable<T0> System.Collections.Generic.IReadOnlyDictionary<T0, T1>.Keys => Keys;
-
-    System.Collections.Generic.IEnumerable<T1> System.Collections.Generic.IReadOnlyDictionary<T0, T1>.Values => Values;
-
-    public T1 this[T0 key]
-    {
-        get
-        {
-            if (!ContainsKey(key))
-            {
-                throw new System.Collections.Generic.KeyNotFoundException();
-            }
-
-            return __get(key);
-        }
-        set
-        {
-            __set(key, value);
-        }
-    }
-
-    public void Add(T0 key, T1 value)
-    {
-        if (ContainsKey(key))
-        {
-            throw new System.ArgumentException("An item with the same key has already been added.", nameof(key));
-        }
-
-        __add(key, value);
-    }
-
-    public void Add(System.Collections.Generic.KeyValuePair<T0, T1> item)
-    {
-        Add(item.Key, item.Value);
-    }
-
-    public bool Contains(System.Collections.Generic.KeyValuePair<T0, T1> item)
-    {
-        return TryGetValue(item.Key, out var value)
-            && System.Collections.Generic.EqualityComparer<T1>.Default.Equals(value, item.Value);
-    }
-
-    public void CopyTo(System.Collections.Generic.KeyValuePair<T0, T1>[] array, int arrayIndex)
-    {
-        System.ArgumentNullException.ThrowIfNull(array);
-        if (arrayIndex < 0)
-        {
-            throw new System.ArgumentOutOfRangeException(nameof(arrayIndex));
-        }
-        if (array.Length - arrayIndex < Count)
-        {
-            throw new System.ArgumentException("Destination array is too small.", nameof(array));
-        }
-
-        for (int i = 0; i < Count; i++)
-        {
-            var key = __get_key_at(i);
-            array[arrayIndex + i] = new System.Collections.Generic.KeyValuePair<T0, T1>(key, __get(key));
-        }
-    }
-
-    public System.Collections.Generic.IEnumerator<System.Collections.Generic.KeyValuePair<T0, T1>> GetEnumerator()
-    {
-        for (int i = 0; i < Count; i++)
-        {
-            var key = __get_key_at(i);
-            yield return new System.Collections.Generic.KeyValuePair<T0, T1>(key, __get(key));
-        }
-    }
-
-    public bool Remove(System.Collections.Generic.KeyValuePair<T0, T1> item)
-    {
-        if (!Contains(item))
-        {
-            return false;
-        }
-
-        return Remove(item.Key);
-    }
-
-    public bool TryGetValue(T0 key, out T1 value)
-    {
-        if (ContainsKey(key))
-        {
-            value = __get(key);
-            return true;
-        }
-
-        value = default!;
-        return false;
-    }
-
-    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
-    }
-
-    internal static __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1> FromOwnedHandle(System.IntPtr handle, __CSBIND23_ITEM_OWNERSHIP__ itemOwnership = __CSBIND23_ITEM_OWNERSHIP__.Owned)
-    {
-        if (handle == System.IntPtr.Zero)
-        {
-            return new __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1>(itemOwnership);
-        }
-
-        return new __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1>(handle, __CSBIND23_ITEM_OWNERSHIP__.Owned, itemOwnership);
-    }
-
-    internal static __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1> FromBorrowedHandle(System.IntPtr handle, __CSBIND23_ITEM_OWNERSHIP__ itemOwnership = __CSBIND23_ITEM_OWNERSHIP__.Owned)
-    {
-        if (handle == System.IntPtr.Zero)
-        {
-            return new __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1>(itemOwnership);
-        }
-
-        return new __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1>(handle, __CSBIND23_ITEM_OWNERSHIP__.Borrowed, itemOwnership);
-    }
-
-    internal static void DestroyOwnedHandle(System.IntPtr handle, __CSBIND23_ITEM_OWNERSHIP__ itemOwnership = __CSBIND23_ITEM_OWNERSHIP__.Owned)
-    {
-        if (handle == System.IntPtr.Zero)
-        {
-            return;
-        }
-
-        using var owner = new __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1>(handle, __CSBIND23_ITEM_OWNERSHIP__.Owned, itemOwnership);
-    }
-
-    internal static System.IntPtr CloneOrCreateOwned(__CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1> value)
-    {
-        var clone = new __CSBIND23_ASSOCIATIVE_WRAPPER__<T0, T1>(value?._itemOwnership ?? __CSBIND23_ITEM_OWNERSHIP__.Owned);
-        if (value != null)
-        {
-            foreach (var item in value)
-            {
-                clone.Add(item.Key, item.Value);
-            }
-        }
-
-        var handle = clone._cPtr.Handle;
-        clone._cPtr = new System.Runtime.InteropServices.HandleRef(clone, System.IntPtr.Zero);
-        clone._ownership = __CSBIND23_ITEM_OWNERSHIP__.Borrowed;
-        System.GC.SuppressFinalize(clone);
-        return handle;
-    }
-
-    private System.Collections.Generic.List<T0> CreateKeysSnapshot()
-    {
-        var result = new System.Collections.Generic.List<T0>(Count);
-        for (int i = 0; i < Count; i++)
-        {
-            result.Add(__get_key_at(i));
-        }
-
-        return result;
-    }
-
-    private System.Collections.Generic.List<T1> CreateValuesSnapshot()
-    {
-        var result = new System.Collections.Generic.List<T1>(Count);
-        for (int i = 0; i < Count; i++)
-        {
-            var key = __get_key_at(i);
-            result.Add(__get(key));
-        }
-
-        return result;
-    })";
-
-    return replace_all(std::move(code), "__CSBIND23_ASSOCIATIVE_WRAPPER__", wrapper_name);
-}
-
 template <typename... Specs>
 using associative_map_builder_t = GenericClassBuilder<detail::instantiate_template_from_spec_t<std::map, Specs>...>;
 
@@ -715,7 +534,6 @@ detail::associative_map_builder_t<Specs...> add_map(BindingsGenerator& generator
             return &csbind23::csbind23_associative_remove<std::map<KeyType, ValueType>>;
         }, Specs>()...>(
         "Remove", detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_remove", "std::map"));
-    builder.csharp_code(detail::make_associative_wrapper_csharp_code("Map"));
     return builder;
 }
 
@@ -765,7 +583,6 @@ detail::associative_unordered_map_builder_t<Specs...> add_unordered_map(Bindings
             return &csbind23::csbind23_associative_remove<std::unordered_map<KeyType, ValueType>>;
         }, Specs>()...>(
         "Remove", detail::make_associative_helper_cpp_symbols<Specs...>("csbind23_associative_remove", "std::unordered_map"));
-    builder.csharp_code(detail::make_associative_wrapper_csharp_code("UnorderedMap"));
     return builder;
 }
 

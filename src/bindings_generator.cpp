@@ -38,7 +38,7 @@ std::vector<std::filesystem::path> BindingsGenerator::generate_cabi(const std::f
 std::vector<std::filesystem::path> BindingsGenerator::generate_csharp(const std::filesystem::path& output_root) const
 {
     const auto modules = resolved_modules();
-    std::vector<std::filesystem::path> generated_files;
+    std::vector<std::filesystem::path> generated_files = emit::copy_csharp_support_files(output_root);
     for (const auto& module_decl : modules)
     {
         auto module_files = emit::emit_csharp_module(module_decl, modules, output_root);

@@ -85,13 +85,9 @@ std::filesystem::path support_csharp_source_root()
     return std::filesystem::path(__FILE__).parent_path().parent_path() / "cs";
 }
 
-std::filesystem::path copy_support_csharp_file(
-    const std::filesystem::path& output_root, std::string_view filename)
+std::filesystem::path partial_csharp_source_root()
 {
-    const auto source_path = support_csharp_source_root() / std::string(filename);
-    const auto output_path = output_root / std::string(filename);
-    std::filesystem::copy_file(source_path, output_path, std::filesystem::copy_options::overwrite_existing);
-    return output_path;
+    return std::filesystem::path(__FILE__).parent_path().parent_path() / "cs_partial";
 }
 
 bool is_any_of(std::string_view value, std::initializer_list<std::string_view> candidates)
@@ -499,51 +495,6 @@ std::string public_parameter_type_name(const ParameterDecl& parameter)
     }
 
     return wrapper_type_name(parameter.type);
-}
-
-void emit_shared_pinvoke_types_if_needed(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
-{
-    if (!module_uses_string_view_support(module_decl) && !module_uses_managed_type(module_decl, "string"))
-    {
-        return;
-    }
-
-    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.types.g.cs"));
-}
-
-void emit_shared_string_view_wrapper_if_needed(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
-{
-    if (!module_uses_string_view_support(module_decl) && !module_uses_std_string_support(module_decl))
-    {
-        return;
-    }
-
-    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23_stl.StringView.g.cs"));
-}
-
-void emit_shared_instance_cache_types_if_needed(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
-{
-    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.instance_cache.g.cs"));
-}
-
-void emit_shared_array_interop_types_if_needed(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
-{
-    if (!module_uses_managed_type(module_decl, "int[]") && !module_uses_c_array_int_parameters(module_decl))
-    {
-        return;
-    }
-
-    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.array.g.cs"));
-}
-
-void emit_shared_item_ownership_type_if_needed(
-    const ModuleDecl& module_decl, const std::filesystem::path& output_root, std::vector<std::filesystem::path>& generated_files)
-{
-    generated_files.push_back(copy_support_csharp_file(output_root, "csbind23.ownership.g.cs"));
 }
 
 std::string pinvoke_return_type(const FunctionDecl& function_decl)
@@ -2603,7 +2554,7 @@ void append_generic_class_wrapper(TextWriter& output, const ModuleDecl& module_d
         base_clause += base_types[index];
     }
 
-    output.append_line_format("public sealed class {}<{}> : {}",
+    output.append_line_format("public sealed partial class {}<{}> : {}",
         managed_name(module_decl, CSharpNameKind::Class, class_group.name),
         generic_type_parameter_list(class_generic_arity),
         base_clause);
@@ -3407,9 +3358,9 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
         base_clause += base_types[index];
     }
 
-    const std::string class_declaration_kind = has_virtual_support
+    const std::string class_declaration_kind = (has_virtual_support || is_primary_base_class)
         ? "partial class"
-        : (is_primary_base_class ? "class" : "sealed class");
+        : "sealed partial class";
     const std::string class_visibility = class_decl.is_generic_instantiation ? "internal" : "public";
 
     append_csharp_attributes(output, "", class_decl.csharp_attributes);
@@ -3740,6 +3691,35 @@ void append_wrapper_class(TextWriter& output, const std::vector<ModuleDecl>& all
 
 } // namespace
 
+std::vector<std::filesystem::path> copy_csharp_support_files(const std::filesystem::path& output_root)
+{
+    std::filesystem::create_directories(output_root);
+
+    std::vector<std::filesystem::path> copied_files;
+    const auto copy_all_files = [&copied_files, &output_root](const std::filesystem::path& source_root) {
+        if (!std::filesystem::exists(source_root))
+        {
+            return;
+        }
+
+        for (const auto& entry : std::filesystem::directory_iterator(source_root))
+        {
+            if (!entry.is_regular_file())
+            {
+                continue;
+            }
+
+            const auto output_path = output_root / entry.path().filename();
+            std::filesystem::copy_file(entry.path(), output_path, std::filesystem::copy_options::overwrite_existing);
+            copied_files.push_back(output_path);
+        }
+    };
+
+    copy_all_files(support_csharp_source_root());
+    copy_all_files(partial_csharp_source_root());
+    return copied_files;
+}
+
 std::vector<std::filesystem::path> emit_csharp_module(
     const ModuleDecl& module_decl,
     const std::vector<ModuleDecl>& all_modules,
@@ -3748,11 +3728,6 @@ std::vector<std::filesystem::path> emit_csharp_module(
     std::filesystem::create_directories(output_root);
 
     std::vector<std::filesystem::path> generated_files;
-    emit_shared_item_ownership_type_if_needed(module_decl, output_root, generated_files);
-    emit_shared_pinvoke_types_if_needed(module_decl, output_root, generated_files);
-    emit_shared_string_view_wrapper_if_needed(module_decl, output_root, generated_files);
-    emit_shared_instance_cache_types_if_needed(module_decl, output_root, generated_files);
-    emit_shared_array_interop_types_if_needed(module_decl, output_root, generated_files);
 
     for (const auto& class_decl : module_decl.classes)
     {

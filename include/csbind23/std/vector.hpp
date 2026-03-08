@@ -94,129 +94,6 @@ CppSymbols make_vector_helper_cpp_symbols(std::string_view helper_name)
     return symbols;
 }
 
-inline std::string make_vector_wrapper_csharp_code(std::string_view wrapper_name)
-{
-    std::string code = R"(    public int Count => checked((int)size());
-
-    public bool IsReadOnly => false;
-
-    public T this[int index]
-    {
-        get
-        {
-            EnsureIndex(index, allowCount: false);
-            return __get(index);
-        }
-        set
-        {
-            EnsureIndex(index, allowCount: false);
-            __set(index, value);
-        }
-    }
-
-    public void CopyTo(T[] array, int arrayIndex)
-    {
-        System.ArgumentNullException.ThrowIfNull(array);
-        if (arrayIndex < 0)
-        {
-            throw new System.ArgumentOutOfRangeException(nameof(arrayIndex));
-        }
-        if (array.Length - arrayIndex < Count)
-        {
-            throw new System.ArgumentException("Destination array is too small.", nameof(array));
-        }
-
-        for (int i = 0; i < Count; i++)
-        {
-            array[arrayIndex + i] = __get(i);
-        }
-    }
-
-    public System.Collections.Generic.IEnumerator<T> GetEnumerator()
-    {
-        for (int i = 0; i < Count; i++)
-        {
-            yield return __get(i);
-        }
-    }
-
-    public void Insert(int index, T item)
-    {
-        EnsureIndex(index, allowCount: true);
-        __insert(index, item);
-    }
-
-    public void RemoveAt(int index)
-    {
-        EnsureIndex(index, allowCount: false);
-        __erase_at(index);
-    }
-
-    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
-    }
-
-    internal static __CSBIND23_VECTOR_WRAPPER__<T> FromOwnedHandle(System.IntPtr handle, __CSBIND23_ITEM_OWNERSHIP__ itemOwnership = __CSBIND23_ITEM_OWNERSHIP__.Owned)
-    {
-        if (handle == System.IntPtr.Zero)
-        {
-            return new __CSBIND23_VECTOR_WRAPPER__<T>(itemOwnership);
-        }
-
-        return new __CSBIND23_VECTOR_WRAPPER__<T>(handle, __CSBIND23_ITEM_OWNERSHIP__.Owned, itemOwnership);
-    }
-
-    internal static __CSBIND23_VECTOR_WRAPPER__<T> FromBorrowedHandle(System.IntPtr handle, __CSBIND23_ITEM_OWNERSHIP__ itemOwnership = __CSBIND23_ITEM_OWNERSHIP__.Owned)
-    {
-        if (handle == System.IntPtr.Zero)
-        {
-            return new __CSBIND23_VECTOR_WRAPPER__<T>(itemOwnership);
-        }
-
-        return new __CSBIND23_VECTOR_WRAPPER__<T>(handle, __CSBIND23_ITEM_OWNERSHIP__.Borrowed, itemOwnership);
-    }
-
-    internal static void DestroyOwnedHandle(System.IntPtr handle, __CSBIND23_ITEM_OWNERSHIP__ itemOwnership = __CSBIND23_ITEM_OWNERSHIP__.Owned)
-    {
-        if (handle == System.IntPtr.Zero)
-        {
-            return;
-        }
-
-        using var owner = new __CSBIND23_VECTOR_WRAPPER__<T>(handle, __CSBIND23_ITEM_OWNERSHIP__.Owned, itemOwnership);
-    }
-
-    internal static System.IntPtr CloneOrCreateOwned(__CSBIND23_VECTOR_WRAPPER__<T> value)
-    {
-        var clone = new __CSBIND23_VECTOR_WRAPPER__<T>(value?._itemOwnership ?? __CSBIND23_ITEM_OWNERSHIP__.Owned);
-        if (value != null)
-        {
-            foreach (var item in value)
-            {
-                clone.Add(item);
-            }
-        }
-
-        var handle = clone._cPtr.Handle;
-        clone._cPtr = new System.Runtime.InteropServices.HandleRef(clone, System.IntPtr.Zero);
-        clone._ownership = __CSBIND23_ITEM_OWNERSHIP__.Borrowed;
-        System.GC.SuppressFinalize(clone);
-        return handle;
-    }
-
-    private void EnsureIndex(int index, bool allowCount)
-    {
-        int upperBound = allowCount ? Count : Count - 1;
-        if (index < 0 || index > upperBound)
-        {
-            throw new System.ArgumentOutOfRangeException(nameof(index));
-        }
-    })";
-
-    return replace_all(std::move(code), "__CSBIND23_VECTOR_WRAPPER__", wrapper_name);
-}
-
 } // namespace csbind23::detail
 
 namespace csbind23::cabi::detail
@@ -416,7 +293,6 @@ GenericClassBuilder<std::vector<Types>...> add_vector(BindingsGenerator& generat
         "__erase_at", Private{}, detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_erase_at"));
     builder.template def<&csbind23::csbind23_vector_remove_first<Types>...>("Remove",
         detail::make_vector_helper_cpp_symbols<Types...>("csbind23_vector_remove_first"));
-    builder.csharp_code(detail::make_vector_wrapper_csharp_code("Vector"));
     return builder;
 }
 
